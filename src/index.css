@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #f6f7f9;
+  color: #1f2937;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+/* Markdown content in the editor preview */
+.md > * { margin: 0 0 0.6em; }
+.md h1, .md h2, .md h3 { font-weight: 700; line-height: 1.2; }
+.md h1 { font-size: 1.25rem; }
+.md h2 { font-size: 1.1rem; }
+.md ul, .md ol { padding-left: 1.2em; }
+.md a { color: #0d9488; text-decoration: underline; }
+.md code { background: #eceff3; padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; }
+
+/* Hide scrollbars on the horizontal board on mobile while keeping scroll */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Rich-text editor: placeholder + formatting */
+.note-edit:empty::before {
+  content: attr(data-placeholder);
+  color: #9aa4b2;
+  pointer-events: none;
+}
+.note-edit b, .note-edit strong, .note-body b, .note-body strong { font-weight: 700; }
+.note-edit ul, .note-body ul { list-style: disc; padding-left: 1.25em; margin: 0.25em 0; }
+.note-edit li, .note-body li { margin: 0.1em 0; }
+
+/* Note content shown on a board tile (clamped to a few lines) */
+.note-body {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
