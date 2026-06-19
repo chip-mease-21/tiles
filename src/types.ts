@@ -29,6 +29,7 @@ export interface Entry {
   tags: string[]
   dueDate?: string | null // ISO yyyy-mm-dd
   pinned: boolean
+  archived?: boolean
   tasks: Task[]
   createdAt?: number
   updatedAt?: number

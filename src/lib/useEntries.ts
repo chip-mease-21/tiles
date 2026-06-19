@@ -57,6 +57,7 @@ export async function createEntry(
     tags: partial.tags ?? [],
     dueDate: partial.dueDate ?? null,
     pinned: partial.pinned ?? false,
+    archived: partial.archived ?? false,
     tasks: partial.tasks ?? [],
     createdAt: now, // client time so the "created" date shows immediately
     updatedAt: serverTimestamp()

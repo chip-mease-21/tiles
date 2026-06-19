@@ -26,12 +26,18 @@ export default function App() {
   const [quickAdd, setQuickAdd] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [search, setSearch] = useState('')
+  const [showArchived, setShowArchived] = useState(false)
   const [sorts, setSorts] = useState<Record<ColumnId, SortMode>>(DEFAULT_SORTS)
 
-  const tags = useMemo(() => allTags(entries), [entries])
+  const tags = useMemo(() => allTags(entries.filter((e) => !e.archived)), [entries])
   const filtered = useMemo(
-    () => entries.filter((e) => matchesFilter(e, selectedTags, search)),
-    [entries, selectedTags, search]
+    () =>
+      entries.filter(
+        (e) =>
+          matchesFilter(e, selectedTags, search) &&
+          (showArchived ? e.archived === true : !e.archived)
+      ),
+    [entries, selectedTags, search, showArchived]
   )
   const openEntry = entries.find((e) => e.id === openId) || null
 
@@ -63,10 +69,20 @@ export default function App() {
   return (
     <div className="min-h-screen pb-24">
       <header className="flex items-center justify-between px-4 pt-3">
-        <h1 className="text-xl font-bold tracking-tight">Tiles</h1>
-        <button onClick={() => signOut()} className="text-xs text-muted">
-          Sign out
-        </button>
+        <h1 className="text-xl font-bold tracking-tight">
+          {showArchived ? 'Archived' : 'Tiles'}
+        </h1>
+        <div className="flex items-center gap-3 text-xs text-muted">
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            className={showArchived ? 'font-semibold text-accent' : 'hover:text-text'}
+          >
+            {showArchived ? '← Board' : 'Archived'}
+          </button>
+          <button onClick={() => signOut()} className="hover:text-text">
+            Sign out
+          </button>
+        </div>
       </header>
 
       <TagBar

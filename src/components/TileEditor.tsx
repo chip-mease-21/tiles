@@ -1,12 +1,9 @@
 import { useEffect, useState } from 'react'
 import RichText from './RichText'
-import type { Entry, EntryType, Task } from '../types'
+import TaskList from './TaskList'
+import type { Entry, EntryType } from '../types'
 import { sortTags } from '../lib/sort'
 import { updateEntry, deleteEntry } from '../lib/useEntries'
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10)
-}
 
 export default function TileEditor({
   entry,
@@ -57,27 +54,19 @@ export default function TileEditor({
     set('type', type)
   }
 
-  // ---- tasks (for to-do tiles) ----
-  function addTask() {
-    const next: Task = {
-      id: uid(),
-      text: '',
-      done: false,
-      position: (local.tasks.at(-1)?.position ?? 0) + 1
-    }
-    set('tasks', [...local.tasks, next])
+  // Flush the current edits immediately (debounced autosave may not have fired).
+  function closeAndSave() {
+    const { id, ...patch } = local
+    void id
+    updateEntry(entry.id, patch)
+    onClose()
   }
-  function updateTask(id: string, patch: Partial<Task>) {
-    set(
-      'tasks',
-      local.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t))
-    )
-  }
-  function removeTask(id: string) {
-    set(
-      'tasks',
-      local.tasks.filter((t) => t.id !== id)
-    )
+
+  function archiveAndClose(value: boolean) {
+    const { id, ...patch } = local
+    void id
+    updateEntry(entry.id, { ...patch, archived: value })
+    onClose()
   }
 
   const suggestions = knownTags
@@ -86,7 +75,7 @@ export default function TileEditor({
 
   return (
     <div className="fixed inset-0 z-40 flex items-end sm:items-center sm:justify-center">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60" onClick={closeAndSave} />
       <div className="relative z-10 flex max-h-[92vh] w-full flex-col overflow-y-auto rounded-t-2xl border border-edge bg-panel p-4 sm:max-w-lg sm:rounded-2xl">
         <div className="mb-3 flex items-center justify-between">
           <div className="inline-flex rounded-lg border border-edge bg-ink p-0.5 text-xs">
@@ -111,7 +100,7 @@ export default function TileEditor({
             >
               📌
             </button>
-            <button onClick={onClose} className="text-muted hover:text-text">
+            <button onClick={closeAndSave} className="text-muted hover:text-text">
               Done
             </button>
           </div>
@@ -194,46 +183,28 @@ export default function TileEditor({
             />
           </div>
         ) : (
-          <div className="mb-3 space-y-1.5">
-            {local.tasks.map((t) => (
-              <div key={t.id} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={t.done}
-                  onChange={(e) => updateTask(t.id, { done: e.target.checked })}
-                  className="h-4 w-4 accent-teal-400"
-                />
-                <input
-                  value={t.text}
-                  onChange={(e) => updateTask(t.id, { text: e.target.value })}
-                  placeholder="Task..."
-                  className={`flex-1 bg-transparent text-sm outline-none ${
-                    t.done ? 'text-muted line-through' : 'text-text'
-                  }`}
-                />
-                <button onClick={() => removeTask(t.id)} className="text-muted">
-                  ×
-                </button>
-              </div>
-            ))}
-            <button
-              onClick={addTask}
-              className="text-xs text-accent hover:underline"
-            >
-              + Add task
-            </button>
+          <div className="mb-3">
+            <TaskList tasks={local.tasks} onChange={(tasks) => set('tasks', tasks)} />
           </div>
         )}
 
-        <button
-          onClick={() => {
-            deleteEntry(entry.id)
-            onClose()
-          }}
-          className="mt-2 self-start text-xs text-red-300/80 hover:text-red-300"
-        >
-          Delete tile
-        </button>
+        <div className="mt-2 flex items-center justify-between">
+          <button
+            onClick={() => archiveAndClose(!local.archived)}
+            className="text-xs text-muted hover:text-text"
+          >
+            {local.archived ? 'Unarchive' : 'Archive'}
+          </button>
+          <button
+            onClick={() => {
+              deleteEntry(entry.id)
+              onClose()
+            }}
+            className="text-xs text-red-400/90 hover:text-red-500"
+          >
+            Delete tile
+          </button>
+        </div>
       </div>
     </div>
   )
