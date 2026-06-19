@@ -6,6 +6,7 @@ import { matchesFilter } from './lib/sort'
 import { parseCapture } from './lib/parse'
 import { COLUMNS, type ColumnId, type SortMode } from './types'
 import Board from './components/Board'
+import BoardColumns from './components/BoardColumns'
 import TileEditor from './components/TileEditor'
 import QuickAdd from './components/QuickAdd'
 import TagBar from './components/TagBar'
@@ -20,10 +21,24 @@ const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
   someday: 'manual'
 }
 
+// On wide screens show all columns at once; on phones use the tab view.
+function useIsDesktop() {
+  const [d, setD] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth >= 1024
+  )
+  useEffect(() => {
+    const onResize = () => setD(window.innerWidth >= 1024)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return d
+}
+
 export default function App() {
   const { user, loading } = useAuth()
   const { entries } = useEntries(user?.uid)
   const { tagCategories } = useUserData(user?.uid)
+  const isDesktop = useIsDesktop()
 
   const [openId, setOpenId] = useState<string | null>(null)
   const [quickAdd, setQuickAdd] = useState(false)
@@ -130,45 +145,59 @@ export default function App() {
         onSearch={setSearch}
       />
 
-      {/* Column tabs — one column at a time */}
-      <div className="no-scrollbar mt-1 flex gap-1.5 overflow-x-auto px-3 py-2">
-        {COLUMNS.map((c) => {
-          const active = c.id === activeColumn
-          return (
-            <button
-              key={c.id}
-              onClick={() => setActiveColumn(c.id)}
-              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-colors ${
-                active
-                  ? 'bg-accent font-semibold text-white'
-                  : 'bg-panel text-muted hover:text-text'
-              }`}
-            >
-              {c.label}
-              {counts[c.id] > 0 && (
-                <span
-                  className={`rounded-full px-1.5 text-[11px] ${
-                    active ? 'bg-white/25 text-white' : 'bg-column text-muted'
-                  }`}
-                >
-                  {counts[c.id]}
-                </span>
-              )}
-            </button>
-          )
-        })}
-      </div>
+      {/* Phone: column tabs (one column at a time). Desktop: all columns. */}
+      {!isDesktop && (
+        <div className="no-scrollbar mt-1 flex gap-1.5 overflow-x-auto px-3 py-2">
+          {COLUMNS.map((c) => {
+            const active = c.id === activeColumn
+            return (
+              <button
+                key={c.id}
+                onClick={() => setActiveColumn(c.id)}
+                className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-colors ${
+                  active
+                    ? 'bg-accent font-semibold text-white'
+                    : 'bg-panel text-muted hover:text-text'
+                }`}
+              >
+                {c.label}
+                {counts[c.id] > 0 && (
+                  <span
+                    className={`rounded-full px-1.5 text-[11px] ${
+                      active ? 'bg-white/25 text-white' : 'bg-column text-muted'
+                    }`}
+                  >
+                    {counts[c.id]}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
 
-      <Board
-        entries={filtered}
-        activeColumn={activeColumn}
-        sorts={sorts}
-        cats={tagCategories}
-        onSortChange={setColumnSort}
-        onOpen={setOpenId}
-        onQuickAdd={addToColumn}
-        onTagClick={(t) => setSelectedTags([t])}
-      />
+      {isDesktop ? (
+        <BoardColumns
+          entries={filtered}
+          sorts={sorts}
+          cats={tagCategories}
+          onSortChange={setColumnSort}
+          onOpen={setOpenId}
+          onQuickAdd={addToColumn}
+          onTagClick={(t) => setSelectedTags([t])}
+        />
+      ) : (
+        <Board
+          entries={filtered}
+          activeColumn={activeColumn}
+          sorts={sorts}
+          cats={tagCategories}
+          onSortChange={setColumnSort}
+          onOpen={setOpenId}
+          onQuickAdd={addToColumn}
+          onTagClick={(t) => setSelectedTags([t])}
+        />
+      )}
 
       {/* Frictionless capture button */}
       <button
