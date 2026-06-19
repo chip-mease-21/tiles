@@ -36,3 +36,15 @@ export interface Entry {
 }
 
 export type SortMode = 'manual' | 'due' | 'tag'
+
+export const TAG_CATEGORIES = ['Roles', 'People', 'Areas', 'Personal'] as const
+export type TagCategory = (typeof TAG_CATEGORIES)[number] | 'Unsorted'
+
+// Order used when displaying grouped tags.
+export const TAG_CATEGORY_ORDER: TagCategory[] = [
+  'Roles',
+  'People',
+  'Areas',
+  'Personal',
+  'Unsorted'
+]

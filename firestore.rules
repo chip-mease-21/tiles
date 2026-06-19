@@ -1,17 +1,16 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Each entry belongs to one user. A user can only read or write their own.
+    // Tiles: each entry belongs to one user.
     match /entries/{entryId} {
-      allow read, delete: if request.auth != null
-        && resource.data.userId == request.auth.uid;
-
+      allow read, update, delete: if request.auth != null
+        && request.auth.uid == resource.data.userId;
       allow create: if request.auth != null
-        && request.resource.data.userId == request.auth.uid;
-
-      allow update: if request.auth != null
-        && resource.data.userId == request.auth.uid
-        && request.resource.data.userId == request.auth.uid;
+        && request.auth.uid == request.resource.data.userId;
+    }
+    // Per-user data (tag categories, etc.) keyed by the user's uid.
+    match /userdata/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

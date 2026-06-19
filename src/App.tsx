@@ -1,13 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAuth, signOut } from './lib/useAuth'
 import { useEntries, createEntry } from './lib/useEntries'
-import { allTags, matchesFilter } from './lib/sort'
+import { useUserData, registerTags } from './lib/useUserData'
+import { matchesFilter } from './lib/sort'
 import { parseCapture } from './lib/parse'
 import { COLUMNS, type ColumnId, type SortMode } from './types'
 import Board from './components/Board'
 import TileEditor from './components/TileEditor'
 import QuickAdd from './components/QuickAdd'
 import TagBar from './components/TagBar'
+import TagManager from './components/TagManager'
 import Login from './components/Login'
 
 const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
@@ -21,15 +23,35 @@ const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
 export default function App() {
   const { user, loading } = useAuth()
   const { entries } = useEntries(user?.uid)
+  const { tagCategories } = useUserData(user?.uid)
 
   const [openId, setOpenId] = useState<string | null>(null)
   const [quickAdd, setQuickAdd] = useState(false)
+  const [showTags, setShowTags] = useState(false)
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [search, setSearch] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const [sorts, setSorts] = useState<Record<ColumnId, SortMode>>(DEFAULT_SORTS)
 
-  const tags = useMemo(() => allTags(entries.filter((e) => !e.archived)), [entries])
+  // Tags used in entries -> usage counts; also keep the persistent tag list in sync.
+  const usage = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const e of entries) {
+      if (e.archived) continue
+      for (const t of e.tags) m[t] = (m[t] || 0) + 1
+    }
+    return m
+  }, [entries])
+
+  useEffect(() => {
+    if (!user) return
+    const used = new Set<string>()
+    for (const e of entries) for (const t of e.tags) used.add(t)
+    registerTags(user.uid, [...used], tagCategories)
+  }, [entries, tagCategories, user])
+
+  const knownTags = useMemo(() => Object.keys(tagCategories).sort(), [tagCategories])
+
   const filtered = useMemo(
     () =>
       entries.filter(
@@ -86,13 +108,14 @@ export default function App() {
       </header>
 
       <TagBar
-        tags={tags}
+        tagCategories={tagCategories}
         selected={selectedTags}
         onToggle={toggleTag}
         onClear={() => {
           setSelectedTags([])
           setSearch('')
         }}
+        onManage={() => setShowTags(true)}
         search={search}
         onSearch={setSearch}
       />
@@ -128,16 +151,23 @@ export default function App() {
       )}
 
       {openEntry && (
-        <TileEditor entry={openEntry} knownTags={tags} onClose={() => setOpenId(null)} />
+        <TileEditor entry={openEntry} knownTags={knownTags} onClose={() => setOpenId(null)} />
+      )}
+
+      {showTags && (
+        <TagManager
+          userId={user.uid}
+          tagCategories={tagCategories}
+          usage={usage}
+          onClose={() => setShowTags(false)}
+        />
       )}
 
       {/* column legend for first-time emptiness */}
       {entries.length === 0 && (
         <div className="pointer-events-none fixed inset-x-0 top-1/2 text-center text-sm text-muted">
           Tap + to capture your first idea.
-          <div className="mt-1 text-xs">
-            {COLUMNS.map((c) => c.label).join(' · ')}
-          </div>
+          <div className="mt-1 text-xs">{COLUMNS.map((c) => c.label).join(' · ')}</div>
         </div>
       )}
     </div>
