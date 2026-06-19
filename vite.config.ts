@@ -2,12 +2,10 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-// base is '/' for local dev, and '/tiles/' for the GitHub Pages build
-// (the CI workflow sets VITE_BASE=/tiles/).
-const base = process.env.VITE_BASE ?? '/'
-
-export default defineConfig({
-  base,
+// Relative base ('./') for production so the app works under any GitHub Pages
+// subfolder (e.g. /tiles/). Local dev stays at '/'.
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? './' : '/',
   server: {
     host: true,
     allowedHosts: true
@@ -25,8 +23,8 @@ export default defineConfig({
         background_color: '#f6f7f9',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: base,
-        scope: base,
+        start_url: './',
+        scope: './',
         icons: [
           { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
@@ -34,9 +32,9 @@ export default defineConfig({
         ]
       },
       workbox: {
-        navigateFallback: base + 'index.html',
+        navigateFallback: null,
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}']
       }
     })
   ]
-})
+}))
