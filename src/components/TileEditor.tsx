@@ -1,17 +1,21 @@
 import { useEffect, useState } from 'react'
 import RichText from './RichText'
 import TaskList from './TaskList'
-import type { Entry, EntryType } from '../types'
+import { COLUMNS, type ColumnId, type Entry, type EntryType } from '../types'
 import { sortTags } from '../lib/sort'
+import { tagColor } from '../lib/colors'
 import { updateEntry, deleteEntry } from '../lib/useEntries'
+import type { TagCategories } from '../lib/useUserData'
 
 export default function TileEditor({
   entry,
   knownTags,
+  cats,
   onClose
 }: {
   entry: Entry
   knownTags: string[]
+  cats: TagCategories
   onClose: () => void
 }) {
   const [local, setLocal] = useState<Entry>(entry)
@@ -118,17 +122,21 @@ export default function TileEditor({
         <div className="mb-3">
           <label className="mb-1 block text-xs font-medium text-muted">Tags</label>
           <div className="mb-1 flex flex-wrap gap-1">
-            {local.tags.map((t) => (
-              <span
-                key={t}
-                className="flex items-center gap-1 rounded-full bg-panel2 px-2 py-0.5 text-xs text-accent"
-              >
-                #{t}
-                <button onClick={() => removeTag(t)} className="text-muted">
-                  ×
-                </button>
-              </span>
-            ))}
+            {local.tags.map((t) => {
+              const c = tagColor(t, cats)
+              return (
+                <span
+                  key={t}
+                  style={{ backgroundColor: c.bg, color: c.fg }}
+                  className="flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+                >
+                  #{t}
+                  <button onClick={() => removeTag(t)} style={{ color: c.fg }}>
+                    ×
+                  </button>
+                </span>
+              )
+            })}
           </div>
           <input
             value={tagInput}
@@ -155,6 +163,29 @@ export default function TileEditor({
               ))}
             </div>
           )}
+        </div>
+
+        {/* move to column */}
+        <div className="mb-3">
+          <label className="mb-1 block text-xs font-medium text-muted">Column</label>
+          <div className="flex flex-wrap gap-1.5">
+            {COLUMNS.map((c) => {
+              const on = local.column === c.id
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => set('column', c.id as ColumnId)}
+                  className={`rounded-full px-3 py-1 text-xs ${
+                    on
+                      ? 'bg-accent font-semibold text-white'
+                      : 'border border-edge bg-panel text-muted hover:text-text'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
 
         {/* due date */}

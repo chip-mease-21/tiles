@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { TAG_CATEGORIES, TAG_CATEGORY_ORDER, type TagCategory } from '../types'
-import { tagColor } from '../lib/colors'
+import { categoryColor } from '../lib/colors'
 import { setTagCategory, deleteTag, type TagCategories } from '../lib/useUserData'
 
 export default function TagManager({
@@ -92,7 +92,7 @@ export default function TagManager({
             ) : (
               <div className="space-y-1">
                 {groups[cat].map((tag) => {
-                  const c = tagColor(tag)
+                  const c = categoryColor(cat)
                   return (
                     <div key={tag} className="flex items-center gap-2">
                       <span

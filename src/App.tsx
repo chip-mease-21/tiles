@@ -28,6 +28,7 @@ export default function App() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [quickAdd, setQuickAdd] = useState(false)
   const [showTags, setShowTags] = useState(false)
+  const [activeColumn, setActiveColumn] = useState<ColumnId>('today')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [search, setSearch] = useState('')
   const [showArchived, setShowArchived] = useState(false)
@@ -61,6 +62,14 @@ export default function App() {
       ),
     [entries, selectedTags, search, showArchived]
   )
+  const counts = useMemo(() => {
+    const m = { inbox: 0, notes: 0, today: 0, this_week: 0, someday: 0 } as Record<
+      ColumnId,
+      number
+    >
+    for (const e of filtered) m[e.column] = (m[e.column] || 0) + 1
+    return m
+  }, [filtered])
   const openEntry = entries.find((e) => e.id === openId) || null
 
   if (loading) {
@@ -72,6 +81,7 @@ export default function App() {
 
   async function quickCreate(text: string) {
     const { title, tags, dueDate } = parseCapture(text)
+    setActiveColumn('inbox')
     return createEntry(user!.uid, { title, tags, dueDate, type: 'note', column: 'inbox' })
   }
 
@@ -120,9 +130,40 @@ export default function App() {
         onSearch={setSearch}
       />
 
+      {/* Column tabs — one column at a time */}
+      <div className="no-scrollbar mt-1 flex gap-1.5 overflow-x-auto px-3 py-2">
+        {COLUMNS.map((c) => {
+          const active = c.id === activeColumn
+          return (
+            <button
+              key={c.id}
+              onClick={() => setActiveColumn(c.id)}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm transition-colors ${
+                active
+                  ? 'bg-accent font-semibold text-white'
+                  : 'bg-panel text-muted hover:text-text'
+              }`}
+            >
+              {c.label}
+              {counts[c.id] > 0 && (
+                <span
+                  className={`rounded-full px-1.5 text-[11px] ${
+                    active ? 'bg-white/25 text-white' : 'bg-column text-muted'
+                  }`}
+                >
+                  {counts[c.id]}
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
       <Board
         entries={filtered}
+        activeColumn={activeColumn}
         sorts={sorts}
+        cats={tagCategories}
         onSortChange={setColumnSort}
         onOpen={setOpenId}
         onQuickAdd={addToColumn}
@@ -151,7 +192,12 @@ export default function App() {
       )}
 
       {openEntry && (
-        <TileEditor entry={openEntry} knownTags={knownTags} onClose={() => setOpenId(null)} />
+        <TileEditor
+          entry={openEntry}
+          knownTags={knownTags}
+          cats={tagCategories}
+          onClose={() => setOpenId(null)}
+        />
       )}
 
       {showTags && (

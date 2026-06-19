@@ -51,7 +51,7 @@ export default function TagBar({
             </span>
             {groups[cat].map((tag) => {
               const on = selected.includes(tag)
-              const c = tagColor(tag)
+              const c = tagColor(tag, tagCategories)
               return (
                 <button
                   key={tag}
