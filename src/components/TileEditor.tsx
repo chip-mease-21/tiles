@@ -96,18 +96,13 @@ export default function TileEditor({
               To-Do
             </button>
           </div>
-          <div className="flex items-center gap-3 text-sm">
-            <button
-              onClick={() => set('pinned', !local.pinned)}
-              className={local.pinned ? 'text-amber-300' : 'text-muted'}
-              title="Pin"
-            >
-              📌
-            </button>
-            <button onClick={closeAndSave} className="text-muted hover:text-text">
-              Done
-            </button>
-          </div>
+          <button
+            onClick={() => set('pinned', !local.pinned)}
+            className={`text-sm ${local.pinned ? 'text-amber-500' : 'text-muted'}`}
+            title="Pin"
+          >
+            📌
+          </button>
         </div>
 
         <input
@@ -219,21 +214,29 @@ export default function TileEditor({
           </div>
         )}
 
-        <div className="mt-2 flex items-center justify-between">
+        <div className="mt-3 flex items-center justify-between border-t border-edge pt-3">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => archiveAndClose(!local.archived)}
+              className="text-xs text-muted hover:text-text"
+            >
+              {local.archived ? 'Unarchive' : 'Archive'}
+            </button>
+            <button
+              onClick={() => {
+                deleteEntry(entry.id)
+                onClose()
+              }}
+              className="text-xs text-red-400/90 hover:text-red-500"
+            >
+              Delete
+            </button>
+          </div>
           <button
-            onClick={() => archiveAndClose(!local.archived)}
-            className="text-xs text-muted hover:text-text"
+            onClick={closeAndSave}
+            className="rounded-lg bg-accent px-5 py-1.5 text-sm font-semibold text-white"
           >
-            {local.archived ? 'Unarchive' : 'Archive'}
-          </button>
-          <button
-            onClick={() => {
-              deleteEntry(entry.id)
-              onClose()
-            }}
-            className="text-xs text-red-400/90 hover:text-red-500"
-          >
-            Delete tile
+            Done
           </button>
         </div>
       </div>

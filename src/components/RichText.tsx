@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 
-// Lightweight rich text: Cmd/Ctrl+B for bold, "- " at line start for bullets.
-// Stores simple HTML in `value`. No markdown.
+// Lightweight rich text: Cmd/Ctrl+B bold, "- " for bullets, Tab to indent
+// (sub-bullets), and links (Cmd/Ctrl+K or the link button). Stores HTML.
 export default function RichText({
   value,
   onChange,
@@ -13,7 +13,6 @@ export default function RichText({
 }) {
   const ref = useRef<HTMLDivElement>(null)
 
-  // Seed the content once on mount (and when switching to a different entry).
   useEffect(() => {
     if (ref.current && ref.current.innerHTML !== value) {
       ref.current.innerHTML = value || ''
@@ -22,7 +21,14 @@ export default function RichText({
   }, [])
 
   function emit() {
-    onChange(ref.current?.innerHTML || '')
+    const el = ref.current
+    if (el) {
+      el.querySelectorAll('a').forEach((a) => {
+        a.setAttribute('target', '_blank')
+        a.setAttribute('rel', 'noopener noreferrer')
+      })
+      onChange(el.innerHTML)
+    }
   }
 
   function exec(cmd: string) {
@@ -31,14 +37,38 @@ export default function RichText({
     emit()
   }
 
+  function insertLink() {
+    const sel = window.getSelection()
+    const hasSelection = !!sel && !sel.isCollapsed
+    const url = window.prompt('Link URL', 'https://')
+    if (!url) return
+    ref.current?.focus()
+    if (hasSelection) {
+      document.execCommand('createLink', false, url)
+    } else {
+      const safe = url.replace(/"/g, '%22')
+      document.execCommand('insertHTML', false, `<a href="${safe}">${url}</a> `)
+    }
+    emit()
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
-    // Bold
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
       e.preventDefault()
       exec('bold')
       return
     }
-    // "- " turns the line into a bullet
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      insertLink()
+      return
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      document.execCommand(e.shiftKey ? 'outdent' : 'indent', false)
+      emit()
+      return
+    }
     if (e.key === ' ') {
       const sel = window.getSelection()
       if (sel && sel.isCollapsed && sel.anchorNode) {
@@ -72,6 +102,14 @@ export default function RichText({
           title="Bullet list"
         >
           •
+        </button>
+        <button
+          type="button"
+          onClick={insertLink}
+          className="h-7 w-7 rounded-md border border-edge bg-panel text-sm text-text hover:bg-column"
+          title="Add link (Cmd+K)"
+        >
+          🔗
         </button>
       </div>
       <div

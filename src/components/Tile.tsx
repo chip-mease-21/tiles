@@ -91,6 +91,9 @@ export default function Tile({
       {!isTodo && entry.body && (
         <div
           className="note-body mt-1.5 text-[13px] leading-relaxed text-muted"
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('a')) e.stopPropagation()
+          }}
           dangerouslySetInnerHTML={{ __html: entry.body }}
         />
       )}

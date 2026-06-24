@@ -1,28 +1,35 @@
 import { useEffect, useState } from 'react'
 import { doc, onSnapshot, setDoc, deleteField } from 'firebase/firestore'
 import { db } from './firebase'
-import type { TagCategory } from '../types'
+import { DEFAULT_CATEGORIES, type TagCategory } from '../types'
 
 export type TagCategories = Record<string, TagCategory>
 
-// Per-user document at userdata/{uid} that stores which category each tag belongs to.
-// Keys of tagCategories are the user's persistent tags (they stay even when unused).
+// Per-user document at userdata/{uid}:
+//   tagCategories: which category each tag belongs to (keys = the user's tags)
+//   categories: the ordered list of category names the user has defined
 export function useUserData(userId: string | undefined) {
   const [tagCategories, setTagCategories] = useState<TagCategories>({})
+  const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     if (!userId) return
     const ref = doc(db, 'userdata', userId)
     const unsub = onSnapshot(ref, (snap) => {
-      const data = snap.data() as { tagCategories?: TagCategories } | undefined
+      const data = snap.data() as
+        | { tagCategories?: TagCategories; categories?: string[] }
+        | undefined
       setTagCategories(data?.tagCategories ?? {})
+      setCategories(
+        data?.categories && data.categories.length ? data.categories : DEFAULT_CATEGORIES
+      )
       setLoaded(true)
     })
     return unsub
   }, [userId])
 
-  return { tagCategories, loaded }
+  return { tagCategories, categories, loaded }
 }
 
 export async function setTagCategory(userId: string, tag: string, category: TagCategory) {
@@ -50,6 +57,20 @@ export async function deleteTag(userId: string, tag: string) {
   await setDoc(
     doc(db, 'userdata', userId),
     { tagCategories: { [tag]: deleteField() } },
+    { merge: true }
+  )
+}
+
+export async function addCategory(userId: string, name: string, current: string[]) {
+  const n = name.trim()
+  if (!n || current.includes(n)) return
+  await setDoc(doc(db, 'userdata', userId), { categories: [...current, n] }, { merge: true })
+}
+
+export async function removeCategory(userId: string, name: string, current: string[]) {
+  await setDoc(
+    doc(db, 'userdata', userId),
+    { categories: current.filter((c) => c !== name) },
     { merge: true }
   )
 }

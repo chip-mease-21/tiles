@@ -1,10 +1,19 @@
-export type ColumnId = 'inbox' | 'notes' | 'today' | 'this_week' | 'someday'
+export type ColumnId =
+  | 'inbox'
+  | 'notes'
+  | 'today'
+  | 'this_week'
+  | 'this_month'
+  | 'next_month'
+  | 'someday'
 
 export const COLUMNS: { id: ColumnId; label: string }[] = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'notes', label: 'Notes' },
   { id: 'today', label: 'Today' },
   { id: 'this_week', label: 'This Week' },
+  { id: 'this_month', label: 'This Month' },
+  { id: 'next_month', label: 'Next Month' },
   { id: 'someday', label: 'Someday' }
 ]
 
@@ -37,14 +46,12 @@ export interface Entry {
 
 export type SortMode = 'manual' | 'due' | 'tag'
 
-export const TAG_CATEGORIES = ['Roles', 'People', 'Areas', 'Personal'] as const
-export type TagCategory = (typeof TAG_CATEGORIES)[number] | 'Unsorted'
+// Categories are user-editable, so a category is just a string.
+// 'Unsorted' is the reserved bucket for tags not yet filed.
+export type TagCategory = string
+export const DEFAULT_CATEGORIES = ['Roles', 'People', 'Areas', 'Personal']
 
-// Order used when displaying grouped tags.
-export const TAG_CATEGORY_ORDER: TagCategory[] = [
-  'Roles',
-  'People',
-  'Areas',
-  'Personal',
-  'Unsorted'
-]
+// Build the display order from the user's categories plus the Unsorted bucket.
+export function categoryOrder(categories: string[]): string[] {
+  return [...categories, 'Unsorted']
+}

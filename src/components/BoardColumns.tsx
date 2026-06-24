@@ -113,6 +113,8 @@ export default function BoardColumns({
       notes: [],
       today: [],
       this_week: [],
+      this_month: [],
+      next_month: [],
       someday: []
     }
     for (const e of entries) map[e.column]?.push(e)
@@ -164,7 +166,7 @@ export default function BoardColumns({
       onDragEnd={onDragEnd}
       onDragCancel={() => setActiveId(null)}
     >
-      <div className="flex justify-center gap-3 overflow-x-auto px-4 pb-28 pt-2">
+      <div className="no-scrollbar flex gap-3 overflow-x-auto px-4 pb-28 pt-2">
         {COLUMNS.map((c) => (
           <ColumnPanel
             key={c.id}

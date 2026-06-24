@@ -1,9 +1,10 @@
 import { tagColor } from '../lib/colors'
-import { TAG_CATEGORY_ORDER, type TagCategory } from '../types'
+import { categoryOrder } from '../types'
 import type { TagCategories } from '../lib/useUserData'
 
 export default function TagBar({
   tagCategories,
+  categories,
   selected,
   onToggle,
   onClear,
@@ -12,6 +13,7 @@ export default function TagBar({
   onSearch
 }: {
   tagCategories: TagCategories
+  categories: string[]
   selected: string[]
   onToggle: (t: string) => void
   onClear: () => void
@@ -19,18 +21,14 @@ export default function TagBar({
   search: string
   onSearch: (s: string) => void
 }) {
-  // Group tags by category.
-  const groups: Record<TagCategory, string[]> = {
-    Roles: [],
-    People: [],
-    Areas: [],
-    Personal: [],
-    Unsorted: []
-  }
+  const order = categoryOrder(categories)
+  const groups: Record<string, string[]> = {}
+  for (const cat of order) groups[cat] = []
   for (const [tag, cat] of Object.entries(tagCategories)) {
-    ;(groups[cat] ?? groups.Unsorted).push(tag)
+    const key = groups[cat] !== undefined ? cat : 'Unsorted'
+    groups[key].push(tag)
   }
-  for (const k of TAG_CATEGORY_ORDER) groups[k].sort()
+  for (const cat of Object.keys(groups)) groups[cat].sort()
 
   const hasTags = Object.keys(tagCategories).length > 0
 
@@ -44,31 +42,33 @@ export default function TagBar({
       />
 
       <div className="no-scrollbar flex items-center gap-3 overflow-x-auto pb-1">
-        {TAG_CATEGORY_ORDER.filter((cat) => groups[cat].length > 0).map((cat) => (
-          <div key={cat} className="flex shrink-0 items-center gap-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-              {cat}
-            </span>
-            {groups[cat].map((tag) => {
-              const on = selected.includes(tag)
-              const c = tagColor(tag, tagCategories)
-              return (
-                <button
-                  key={tag}
-                  onClick={() => onToggle(tag)}
-                  style={
-                    on
-                      ? { backgroundColor: c.solid, color: 'white' }
-                      : { backgroundColor: c.bg, color: c.fg }
-                  }
-                  className={`shrink-0 rounded-full px-2.5 py-1 text-xs ${on ? 'font-semibold' : ''}`}
-                >
-                  #{tag}
-                </button>
-              )
-            })}
-          </div>
-        ))}
+        {order
+          .filter((cat) => (groups[cat] ?? []).length > 0)
+          .map((cat) => (
+            <div key={cat} className="flex shrink-0 items-center gap-1.5">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+                {cat}
+              </span>
+              {groups[cat].map((tag) => {
+                const on = selected.includes(tag)
+                const c = tagColor(tag, tagCategories)
+                return (
+                  <button
+                    key={tag}
+                    onClick={() => onToggle(tag)}
+                    style={
+                      on
+                        ? { backgroundColor: c.solid, color: 'white' }
+                        : { backgroundColor: c.bg, color: c.fg }
+                    }
+                    className={`shrink-0 rounded-full px-2.5 py-1 text-xs ${on ? 'font-semibold' : ''}`}
+                  >
+                    #{tag}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
 
         {(selected.length > 0 || search) && (
           <button

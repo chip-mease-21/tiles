@@ -18,6 +18,8 @@ const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
   notes: 'manual',
   today: 'due',
   this_week: 'due',
+  this_month: 'due',
+  next_month: 'due',
   someday: 'manual'
 }
 
@@ -37,7 +39,7 @@ function useIsDesktop() {
 export default function App() {
   const { user, loading } = useAuth()
   const { entries } = useEntries(user?.uid)
-  const { tagCategories } = useUserData(user?.uid)
+  const { tagCategories, categories, loaded: tagsLoaded } = useUserData(user?.uid)
   const isDesktop = useIsDesktop()
 
   const [openId, setOpenId] = useState<string | null>(null)
@@ -60,11 +62,13 @@ export default function App() {
   }, [entries])
 
   useEffect(() => {
-    if (!user) return
+    // Wait until the saved tag categories have loaded, otherwise we'd register
+    // already-categorized tags back to "Unsorted" and wipe the user's filing.
+    if (!user || !tagsLoaded) return
     const used = new Set<string>()
     for (const e of entries) for (const t of e.tags) used.add(t)
     registerTags(user.uid, [...used], tagCategories)
-  }, [entries, tagCategories, user])
+  }, [entries, tagCategories, tagsLoaded, user])
 
   const knownTags = useMemo(() => Object.keys(tagCategories).sort(), [tagCategories])
 
@@ -78,10 +82,15 @@ export default function App() {
     [entries, selectedTags, search, showArchived]
   )
   const counts = useMemo(() => {
-    const m = { inbox: 0, notes: 0, today: 0, this_week: 0, someday: 0 } as Record<
-      ColumnId,
-      number
-    >
+    const m = {
+      inbox: 0,
+      notes: 0,
+      today: 0,
+      this_week: 0,
+      this_month: 0,
+      next_month: 0,
+      someday: 0
+    } as Record<ColumnId, number>
     for (const e of filtered) m[e.column] = (m[e.column] || 0) + 1
     return m
   }, [filtered])
@@ -134,6 +143,7 @@ export default function App() {
 
       <TagBar
         tagCategories={tagCategories}
+        categories={categories}
         selected={selectedTags}
         onToggle={toggleTag}
         onClear={() => {
@@ -233,6 +243,7 @@ export default function App() {
         <TagManager
           userId={user.uid}
           tagCategories={tagCategories}
+          categories={categories}
           usage={usage}
           onClose={() => setShowTags(false)}
         />
