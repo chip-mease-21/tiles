@@ -1,16 +1,354 @@
 rules_version = '2';
+
+// The Point: Tiles + DLT Workspace
+//
+// Two data shapes share one database.
+//   PRIVATE  entries/*  and  users/{uid}/**   readable only by their owner. No admin override.
+//   SHARED   orgs/{orgId}/**                  readable and writable by role
+//
+// The membership document is the single source of authority. It is writable by
+// admins only, so a signed in user cannot promote themselves. Creating the org
+// and seating the first admin happens out of band through the Admin SDK or the
+// Firebase console. That is deliberate: there is no bootstrap path in here,
+// because a bootstrap path is an escalation path.
+//
+// ROLES
+//   admin        Chip. Everything, including membership.
+//
+// Two invariants the rules enforce that are policy, not security:
+//   a rock status cannot move without a status note
+//   an issue cannot close without either a linked decision or a close reason
+//   dlt          Matt, Gabe, Rachel. Full read and write on all shared content
+//                except membership and the org document itself.
+//   contributor  Reserved. Reads all shared content. May change status and
+//                statusNote on a rock they personally own, and may raise, edit
+//                and resolve issues they raised. Defined and tested now so it
+//                can be switched on for staff or campus leaders without
+//                reopening the ruleset.
+//   campus       Reserved, phase 3. Sees their own membership seat and the org
+//                name. Nothing else on the shared board. Still gets a full
+//                private Tiles account like everyone else.
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Tiles: each entry belongs to one user.
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function memberPath(orgId) {
+      return /databases/$(database)/documents/orgs/$(orgId)/members/$(request.auth.uid);
+    }
+
+    // exists() before get() is required. A bare get() on a missing document errors.
+    function isMember(orgId) {
+      return signedIn()
+        && exists(memberPath(orgId))
+        && get(memberPath(orgId)).data.active == true;
+    }
+
+    function memberRole(orgId) {
+      return get(memberPath(orgId)).data.role;
+    }
+
+    function isAdmin(orgId) {
+      return isMember(orgId) && memberRole(orgId) == 'admin';
+    }
+
+    // Full write on shared content. Membership is still admin only.
+    function isEditor(orgId) {
+      return isMember(orgId) && memberRole(orgId) in ['admin', 'dlt'];
+    }
+
+    // Who "share this with the DLT" actually means: the people seated at the
+    // leadership table, admin included, because Chip sits at it too.
+    //
+    // This is the same set as isEditor today and is deliberately a separate
+    // function anyway. One answers who may change the shared board; this one
+    // answers who counts as the DLT for the purpose of somebody else's private
+    // card. The day a fifth role is added those two stop agreeing, and the
+    // wrong one silently widening is exactly the mistake worth designing out.
+    function isDlt(orgId) {
+      return isMember(orgId) && memberRole(orgId) in ['admin', 'dlt'];
+    }
+
+    // Everyone who can see the shared board at all.
+    function canRead(orgId) {
+      return isMember(orgId) && memberRole(orgId) in ['admin', 'dlt', 'contributor'];
+    }
+
+    // The private user space sits outside /orgs, so it cannot infer the org from
+    // its own path. One church, one org id. If a second org ever exists, move
+    // this onto the profile document rather than widening the rule.
+    function HOME_ORG() { return 'thepoint'; }
+
+    function statusValues() {
+      return ['not-started', 'on-track', 'caution', 'off-track', 'done'];
+    }
+
+    // With several people editing the same board, every rock and issue write has
+    // to say who made it and when. The name must be the caller and the time must
+    // come from the server, otherwise the trail is decoration rather than record.
+    //
+    // NOTE FOR THE CLIENT: every write to rocks and issues must include
+    //   updatedBy: <current uid>
+    //   updatedAt: serverTimestamp()
+    // A string or a client Date in updatedAt is rejected.
+    function stamped() {
+      return request.resource.data.get('updatedBy', '') == request.auth.uid
+        && request.resource.data.get('updatedAt', null) == request.time;
+    }
+
+    // Applied on every rock write, editor and contributor alike, so a long note
+    // or a made up status cannot get in through the wider door.
+    // Note: a rock create must carry a status. An absent field reads as '' and
+    // is not in the allowed list, so the create is rejected.
+    function validRock() {
+      return request.resource.data.get('status', '') in statusValues()
+        && request.resource.data.get('statusNote', '').size() < 500;
+    }
+
+    function validIssue() {
+      return request.resource.data.get('status', '') in ['open', 'done'];
+    }
+
+    // A status that moves without a word of explanation is how a board goes
+    // stale while still looking maintained. Move the status, say why.
+    function statusChanged() {
+      return request.resource.data.get('status', '') != resource.data.get('status', '');
+    }
+    // The note has to be written by THIS update, not merely present on the
+    // document. On an update request.resource.data is the merged result, so
+    // checking only its size lets last month's note satisfy this month's status
+    // change: the rock moves with no explanation and carries a stale sentence
+    // that now describes the wrong status. A missing note is better than a
+    // misleading one, so the note must also differ from the one already there.
+    function noteWhenStatusMoves() {
+      return !statusChanged()
+        || (request.resource.data.get('statusNote', '').size() >= 3
+            && request.resource.data.get('statusNote', '')
+               != resource.data.get('statusNote', ''));
+    }
+
+    // Closing an issue has to leave a trace. Either it produced a decision, in
+    // which case decisionId points at the entry, or it did not, in which case
+    // say in one line why it is closing. This is what keeps the decision log
+    // fed by the meeting rather than by somebody remembering afterwards.
+    function issueClosing() {
+      return request.resource.data.get('status', '') == 'done'
+        && resource.data.get('status', '') != 'done';
+    }
+    function closingIsRecorded() {
+      return !issueClosing()
+        || request.resource.data.get('decisionId', '') != ''
+        || request.resource.data.get('closeReason', '').size() >= 3;
+    }
+
+    // The narrow contributor path. Status and note only, nothing else, no field
+    // added, no field removed, no overwrite that drops fields.
+    function onlyStatusFields() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'statusNote', 'updatedAt', 'updatedBy'])
+        && request.resource.data.keys().hasAll(resource.data.keys())
+        && stamped()
+        && validRock();
+    }
+
+    // ---------------------------------------------------------------- PRIVATE
+
+    // Personal task tiles. One per person, and nobody sees anyone else's.
+    // The update rule pins userId. Without that pin a user can create a document
+    // and then reassign it into someone else's board.
+    //
+    // NOTE FOR THE CLIENT: an unfiltered getDocs(collection('entries')) is
+    // rejected. Every query must carry where('userId','==',uid).
     match /entries/{entryId} {
-      allow read, update, delete: if request.auth != null
-        && request.auth.uid == resource.data.userId;
-      allow create: if request.auth != null
-        && request.auth.uid == request.resource.data.userId;
+      allow read, delete: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId;
     }
-    // Per-user data (tag categories, etc.) keyed by the user's uid.
+
+    // Tiles keeps each person's tag categories at userdata/{uid}. Carried over
+    // unchanged from the ruleset this replaces. Leaving it out does not fail
+    // loudly, it silently denies every tag write, so it stays.
     match /userdata/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if signedIn() && request.auth.uid == userId;
     }
+
+    // Everything a person keeps for themselves: their Roles and Expectations
+    // card, their annual goals, their weekly reviews, their settings.
+    //
+    // The owner has full access. Nobody else has any, admin included.
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && uid == request.auth.uid;
+    }
+
+    // The one exception, and it is opt in and revocable.
+    //
+    // A person may publish their roles card, or their annual goals, to the DLT
+    // by setting a flag on their own profile. These blocks OR with the owner
+    // rule above, so they only ever add read access, never write.
+    //
+    // Weekly reviews are deliberately absent from this list. There is no toggle
+    // that shares them. A private space people actually trust is worth more than
+    // any visibility it could buy.
+    function sharePath(uid) {
+      return /databases/$(database)/documents/users/$(uid)/profile/card;
+    }
+    // Published to the whole DLT.
+    function shares(uid, field) {
+      return exists(sharePath(uid)) && get(sharePath(uid)).data.get(field, false) == true;
+    }
+
+    // Published to named people. Deliberately does not require DLT membership,
+    // so a card can be shared with a staff member who does not sit at that table.
+    function sharedWith(uid, field) {
+      return exists(sharePath(uid))
+        && request.auth.uid in get(sharePath(uid)).data.get(field, []);
+    }
+
+    function canReadRoles(uid) {
+      return (isDlt(HOME_ORG()) && shares(uid, 'shareRoles')) || sharedWith(uid, 'shareRolesWith');
+    }
+    function canReadGoals(uid) {
+      return (isDlt(HOME_ORG()) && shares(uid, 'shareGoals')) || sharedWith(uid, 'shareGoalsWith');
+    }
+
+    match /users/{uid}/profile/card {
+      allow read: if signedIn() && (canReadRoles(uid) || canReadGoals(uid));
+    }
+    match /users/{uid}/roles/{roleId} {
+      allow read: if signedIn() && canReadRoles(uid);
+    }
+    match /users/{uid}/goals/{goalId} {
+      allow read: if signedIn() && canReadGoals(uid);
+    }
+
+    // ----------------------------------------------------------------- SHARED
+
+    match /orgs/{orgId} {
+
+      // The org document carries a display name only. A single segment wildcard
+      // does not reach subcollections, so this grants nothing below it.
+      allow read: if isMember(orgId);
+      allow write: if isAdmin(orgId);
+
+      match /members/{uid} {
+        // Editors see the roster. Everyone else sees only their own seat.
+        // This must work for an inactive member and for someone with no seat at
+        // all, because the sign in screen reads it to decide where to send them.
+        // Reading your own uid's document leaks nothing.
+        allow read: if isEditor(orgId) || (signedIn() && uid == request.auth.uid);
+
+        allow create: if isAdmin(orgId);
+
+        // An admin may not demote or deactivate themselves. There is no recovery
+        // path in these rules, so self lockout means opening the console.
+        allow update: if isAdmin(orgId)
+          && !(uid == request.auth.uid
+               && (request.resource.data.role != 'admin' || request.resource.data.active != true));
+
+        allow delete: if isAdmin(orgId) && uid != request.auth.uid;
+      }
+
+      // Rocks. Editors change anything, stamped. Contributors change the status
+      // of a rock they own and nothing else.
+      match /rocks/{rockId} {
+        allow read: if canRead(orgId);
+        allow create: if isEditor(orgId) && stamped() && validRock();
+        allow delete: if isEditor(orgId);   // deletes carry no stamp, there is no request.resource
+        allow update: if noteWhenStatusMoves() && (
+             (isEditor(orgId) && stamped() && validRock())
+          || (canRead(orgId)
+              && resource.data.get('ownerUid', '') == request.auth.uid
+              && request.resource.data.get('ownerUid', '') == resource.data.get('ownerUid', '')
+              && onlyStatusFields())
+        );
+      }
+
+      // Issues.
+      //
+      // Two different fields answer two different questions and they must not be
+      // confused. `updatedBy` is provenance: who actually made this write. It is
+      // pinned to the caller by stamped() and nobody can forge it, ever.
+      // `raisedByUid` is a business attribute: whose issue this is. An editor
+      // taking notes in the meeting needs to log an issue somebody else raised,
+      // so editors may set and change it. A contributor may only speak for
+      // themselves.
+      match /issues/{issueId} {
+        allow read: if canRead(orgId);
+        allow create: if canRead(orgId) && stamped() && validIssue()
+          && (isEditor(orgId)
+              || request.resource.data.get('raisedByUid', '') == request.auth.uid);
+        allow update: if stamped() && validIssue() && closingIsRecorded()
+          && (isEditor(orgId)
+              || (canRead(orgId)
+                  && resource.data.get('raisedByUid', '') == request.auth.uid
+                  && request.resource.data.get('raisedByUid', '') == resource.data.get('raisedByUid', '')));
+        allow delete: if isEditor(orgId)
+          || (canRead(orgId) && resource.data.get('raisedByUid', '') == request.auth.uid);
+      }
+
+      // Reference data. Everyone on the board reads it, editors maintain it.
+      match /campuses/{campusId} {
+        allow read: if canRead(orgId);
+        allow write: if isEditor(orgId);
+      }
+      match /nextgen/{deptId} {
+        allow read: if canRead(orgId);
+        allow write: if isEditor(orgId);
+      }
+      match /departments/{deptId} {
+        allow read: if canRead(orgId);
+        allow write: if isEditor(orgId);
+      }
+      match /culture/{groupId} {
+        allow read: if canRead(orgId);
+        allow write: if isEditor(orgId);
+      }
+      match /decisions/{decisionId} {
+        allow read: if canRead(orgId);
+        allow write: if isEditor(orgId);
+      }
+      match /picture/{horizonId} {
+        allow read: if canRead(orgId);
+        allow write: if isEditor(orgId);
+      }
+      match /meta/{docId} {
+        allow read: if canRead(orgId);
+        allow write: if isEditor(orgId);
+      }
+
+      // Pointers so a recipient can discover a card that was shared with them.
+      //
+      // Needed because someone outside the DLT cannot list the roster, so
+      // without this they would have no way to know a card exists. The pointer
+      // carries a name and nothing else; the actual card is still gated by the
+      // owner's own share list, so a stale pointer grants nothing.
+      match /shares/{shareId} {
+        allow read: if signedIn()
+          && (resource.data.withUid == request.auth.uid
+              || resource.data.ownerUid == request.auth.uid);
+        allow create, update: if signedIn()
+          && request.resource.data.ownerUid == request.auth.uid;
+        allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+      }
+
+      // Whether a person ran their weekly review, and nothing about what they
+      // wrote. Each person writes only their own, and only these three fields,
+      // so this can never become a side channel for private content.
+      match /pulse/{uid} {
+        allow read: if isDlt(orgId);
+        allow write: if signedIn() && uid == request.auth.uid && canRead(orgId)
+          && request.resource.data.keys().hasOnly(['lastReviewOn', 'weekOf', 'updatedAt'])
+          && request.resource.data.get('updatedAt', null) == request.time;
+      }
+    }
+
+    // Everything not matched above is denied by default. Do not add a collection
+    // group rule of the form  match /{path=**}/members/{uid}  to make collection
+    // group queries work. That pattern crosses the org boundary.
   }
 }

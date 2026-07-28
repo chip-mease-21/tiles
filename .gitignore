@@ -7,3 +7,5 @@ dist-ssr
 .DS_Store
 .firebase
 firebase-debug.log
+serviceAccount.json
+firestore-debug.log
