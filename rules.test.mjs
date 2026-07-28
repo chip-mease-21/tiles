@@ -82,6 +82,14 @@ await env.withSecurityRulesDisabled(async (ctx) => {
   await setDoc(doc(db, `orgs/${ORG}/pulse/rachel`), { lastReviewOn: '2026-07-27', weekOf: '2026-07-27' });
   await setDoc(doc(db, `orgs/${ORG}/shares/rachel__chip`), { ownerUid: 'rachel', ownerName: 'Rachel', withUid: 'chip' });
   await setDoc(doc(db, `orgs/${ORG}/shares/gabe__sam`), { ownerUid: 'gabe', ownerName: 'Gabe', withUid: 'sam' });
+
+  // Invites: a seat assigned to an email before that person has ever signed in.
+  await setDoc(doc(db, `orgs/${ORG}/invites/newbie@thepointcville.com`), {
+    name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt', campusId: null });
+  // Seeded past the rules on purpose. An admin invite cannot be written through
+  // them, and this proves it cannot be claimed either if one ever appeared.
+  await setDoc(doc(db, `orgs/${ORG}/invites/boss@thepointcville.com`), {
+    name: 'Would Be Boss', email: 'boss@thepointcville.com', role: 'admin', campusId: null });
 });
 
 const chip = env.authenticatedContext('chip').firestore();
@@ -93,6 +101,19 @@ const kyler = env.authenticatedContext('kyler').firestore();
 const leaver = env.authenticatedContext('leaver').firestore();
 const stranger = env.authenticatedContext('stranger').firestore();
 const anon = env.unauthenticatedContext().firestore();
+
+// Signed in with a Google identity, carrying an email claim. None of these
+// people have a seat yet.
+const tok = (email, verified = true) => ({ email, email_verified: verified });
+const newbie    = env.authenticatedContext('u_newbie', tok('newbie@thepointcville.com')).firestore();
+const unverified = env.authenticatedContext('u_unver', tok('newbie@thepointcville.com', false)).firestore();
+const wouldbeboss = env.authenticatedContext('u_boss', tok('boss@thepointcville.com')).firestore();
+const walkin    = env.authenticatedContext('u_walkin', tok('random@gmail.com')).firestore();
+
+const seat = (extra = {}) => ({
+  name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt',
+  active: true, campusId: null, claimedAt: serverTimestamp(), ...extra,
+});
 
 console.log('\nREAD ACCESS');
 await t('editor reads all rocks', () => assertSucceeds(getDocs(collection(matt, `orgs/${ORG}/rocks`))));
@@ -310,6 +331,51 @@ await t('admin adds a member', () => assertSucceeds(
 // suite then "passed" a later test for entirely the wrong reason.
 await t('admin changes a role', () => assertSucceeds(
   updateDoc(doc(chip, `orgs/${ORG}/members/newguy`), { role: 'contributor' })));
+
+console.log('\nAN INVITE SEATS SOMEBODY WITHOUT THE ADMIN IN THE LOOP');
+await t('you can read the invite addressed to you', () => assertSucceeds(
+  getDoc(doc(newbie, `orgs/${ORG}/invites/newbie@thepointcville.com`))));
+await t("you cannot read somebody else's invite", () => assertFails(
+  getDoc(doc(newbie, `orgs/${ORG}/invites/boss@thepointcville.com`))));
+await t('a walk in cannot read an invite that is not theirs', () => assertFails(
+  getDoc(doc(walkin, `orgs/${ORG}/invites/newbie@thepointcville.com`))));
+await t('a non admin cannot write an invite', () => assertFails(
+  setDoc(doc(matt, `orgs/${ORG}/invites/friend@thepointcville.com`),
+    { name: 'Friend', email: 'friend@thepointcville.com', role: 'dlt', campusId: null })));
+await t('the admin writes an invite', () => assertSucceeds(
+  setDoc(doc(chip, `orgs/${ORG}/invites/friend@thepointcville.com`),
+    { name: 'Friend', email: 'friend@thepointcville.com', role: 'contributor', campusId: null })));
+await t('an invite cannot name the admin role', () => assertFails(
+  setDoc(doc(chip, `orgs/${ORG}/invites/other@thepointcville.com`),
+    { name: 'Other', email: 'other@thepointcville.com', role: 'admin', campusId: null })));
+await t('an invite cannot be addressed to a different email than its id', () => assertFails(
+  setDoc(doc(chip, `orgs/${ORG}/invites/one@thepointcville.com`),
+    { name: 'Two', email: 'two@thepointcville.com', role: 'dlt', campusId: null })));
+
+await t('a signed in stranger with no invite cannot seat themselves', () => assertFails(
+  setDoc(doc(walkin, `orgs/${ORG}/members/u_walkin`), seat({ email: 'random@gmail.com' }))));
+await t('an unverified email cannot claim an invite', () => assertFails(
+  setDoc(doc(unverified, `orgs/${ORG}/members/u_unver`), seat())));
+await t('you cannot claim a seat at a uid that is not yours', () => assertFails(
+  setDoc(doc(newbie, `orgs/${ORG}/members/somebody_else`), seat())));
+await t('you cannot claim a richer role than you were invited to', () => assertFails(
+  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat({ role: 'admin' }))));
+await t('you cannot smuggle an extra field into your seat', () => assertFails(
+  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat({ superuser: true }))));
+await t('the claim date must be server stamped', () => assertFails(
+  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat({ claimedAt: '2020-01-01' }))));
+await t('an admin invite cannot be claimed even if one exists', () => assertFails(
+  setDoc(doc(wouldbeboss, `orgs/${ORG}/members/u_boss`), {
+    name: 'Would Be Boss', email: 'boss@thepointcville.com', role: 'admin',
+    active: true, campusId: null, claimedAt: serverTimestamp() })));
+await t('an invited person claims their own seat', () => assertSucceeds(
+  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat())));
+// Once the seat exists, a repeat write is an update rather than a create, and
+// update is admin only. So a seat the admin switched off cannot be re-claimed.
+await t('a claimed seat cannot be re-created to undo a deactivation', () => assertFails(
+  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat())));
+await t('and the newly seated person cannot promote themselves', () => assertFails(
+  updateDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), { role: 'admin' })));
 
 console.log('\nEVERY PERSON KEEPS A PRIVATE ACCOUNT');
 await t("editor is BLOCKED from Chip's Roles cards", () => assertFails(getDoc(doc(matt, 'users/chip/roles/r_finance'))));

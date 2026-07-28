@@ -77,6 +77,45 @@ service cloud.firestore {
       return isMember(orgId) && memberRole(orgId) in ['admin', 'dlt', 'contributor'];
     }
 
+    // ---------------------------------------------------------------- INVITES
+    //
+    // An invite is a seat assigned to an email address before that person has
+    // ever signed in. Claiming one is the only way a member document can be
+    // created by anybody other than the admin, and it can only ever produce the
+    // exact role that was already written down for that exact address.
+    //
+    // Signing in grants nothing on its own. An invite cannot mint an admin, so
+    // escalation stays a deliberate act on the members screen. And because
+    // create only applies when no document exists, somebody the admin has
+    // deactivated cannot quietly re-claim their way back in.
+    function myEmail() {
+      return request.auth.token.get('email', '');
+    }
+    function emailVerified() {
+      return request.auth.token.get('email_verified', false) == true;
+    }
+    function invitePath(orgId) {
+      return /databases/$(database)/documents/orgs/$(orgId)/invites/$(myEmail());
+    }
+    function invited(orgId) {
+      return get(invitePath(orgId)).data;
+    }
+    function claimingOwnInvite(orgId, uid) {
+      return uid == request.auth.uid
+        && myEmail() != ''
+        && emailVerified()
+        && exists(invitePath(orgId))
+        && invited(orgId).get('role', '') in ['dlt', 'contributor', 'campus']
+        && request.resource.data.get('role', '') == invited(orgId).get('role', '')
+        && request.resource.data.get('name', '') == invited(orgId).get('name', '')
+        && request.resource.data.get('campusId', null) == invited(orgId).get('campusId', null)
+        && request.resource.data.get('email', '') == myEmail()
+        && request.resource.data.get('active', false) == true
+        && request.resource.data.keys()
+             .hasOnly(['name', 'email', 'role', 'active', 'campusId', 'claimedAt'])
+        && request.resource.data.get('claimedAt', null) == request.time;
+    }
+
     // The private user space sits outside /orgs, so it cannot infer the org from
     // its own path. One church, one org id. If a second org ever exists, move
     // this onto the profile document rather than widening the rule.
@@ -242,7 +281,10 @@ service cloud.firestore {
         // Reading your own uid's document leaks nothing.
         allow read: if isEditor(orgId) || (signedIn() && uid == request.auth.uid);
 
-        allow create: if isAdmin(orgId);
+        // Either the admin seats somebody by hand, or somebody claims the seat
+        // already assigned to their verified email address. Nothing else.
+        allow create: if isAdmin(orgId)
+          || (signedIn() && claimingOwnInvite(orgId, uid));
 
         // An admin may not demote or deactivate themselves. There is no recovery
         // path in these rules, so self lockout means opening the console.
@@ -251,6 +293,19 @@ service cloud.firestore {
                && (request.resource.data.role != 'admin' || request.resource.data.active != true));
 
         allow delete: if isAdmin(orgId) && uid != request.auth.uid;
+      }
+
+      // Pending invites, keyed by lowercase email address. A person may read the
+      // one addressed to them so the app can claim it on their behalf; they can
+      // never read anyone else's, and they can never write one at all.
+      match /invites/{email} {
+        allow read: if isEditor(orgId) || (signedIn() && email == myEmail());
+        allow create, update: if isAdmin(orgId)
+          && request.resource.data.get('email', '') == email
+          && request.resource.data.get('role', '') in ['dlt', 'contributor', 'campus']
+          && request.resource.data.keys()
+               .hasOnly(['name', 'email', 'role', 'campusId', 'invitedAt']);
+        allow delete: if isAdmin(orgId);
       }
 
       // Rocks. Editors change anything, stamped. Contributors change the status

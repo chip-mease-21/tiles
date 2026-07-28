@@ -9,7 +9,7 @@
  *   2. every path is built from one place, so nothing hardcodes a collection.
  */
 import {
-  addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query,
+  addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, orderBy, query,
   serverTimestamp, setDoc, updateDoc, where, type DocumentData,
   type QueryDocumentSnapshot, type Unsubscribe,
 } from 'firebase/firestore';
@@ -17,7 +17,7 @@ import {
 // line to change.
 import { auth, db } from './firebase';
 import {
-  ORG_ID, type Decision, type Issue, type Member, type OrgSettings,
+  ORG_ID, type Decision, type Invite, type Issue, type Member, type OrgSettings,
   type Picture, type PriorityGroup, type CultureGroup, type Rock, type RockStatus,
 } from '../types/dlt';
 
@@ -27,6 +27,8 @@ export const paths = {
   org: orgPath(),
   members: orgPath('members'),
   member: (uid: string) => orgPath('members', uid),
+  invites: orgPath('invites'),
+  invite: (email: string) => orgPath('invites', email.trim().toLowerCase()),
   rocks: orgPath('rocks'),
   rock: (id: string) => orgPath('rocks', id),
   issues: orgPath('issues'),
@@ -232,3 +234,51 @@ export function upsertMember(m: Member) {
 
 export const setMemberActive = (memberUid: string, active: boolean) =>
   updateDoc(doc(db, paths.member(memberUid)), { active, updatedAt: serverTimestamp() });
+
+/* ---------------------------------------------------------------- invites */
+
+/**
+ * Seating somebody used to need their Firebase uid, which only exists after
+ * they sign in once, which meant a round trip through the admin. An invite
+ * removes that: the admin writes the seat against an email address now, and the
+ * app claims it the first time that person signs in.
+ *
+ * The rules do the enforcing. This just carries the values.
+ */
+export function watchInvites(cb: (i: Invite[]) => void): Unsubscribe {
+  return onSnapshot(query(collection(db, paths.invites), orderBy('name')), (snap) =>
+    cb(snap.docs.map((d) => ({ ...d.data(), email: d.id } as Invite))));
+}
+
+export const saveInvite = (i: Invite) =>
+  setDoc(doc(db, paths.invite(i.email)), {
+    name: i.name.trim(),
+    email: i.email.trim().toLowerCase(),
+    role: i.role,
+    campusId: i.campusId ?? null,
+    invitedAt: serverTimestamp(),
+  });
+
+export const deleteInvite = (email: string) => deleteDoc(doc(db, paths.invite(email)));
+
+/**
+ * Claim the seat waiting for this email address, if there is one. Returns false
+ * when there is no invite, which is the ordinary case for anyone who simply
+ * uses Tiles and has nothing to do with the DLT board.
+ */
+export async function claimSeat(uid: string, email: string | null | undefined): Promise<boolean> {
+  const e = email?.trim().toLowerCase();
+  if (!e) return false;
+  const snap = await getDoc(doc(db, paths.invite(e)));
+  if (!snap.exists()) return false;
+  const inv = snap.data() as Invite;
+  await setDoc(doc(db, paths.member(uid)), {
+    name: inv.name,
+    email: e,
+    role: inv.role,
+    active: true,
+    campusId: inv.campusId ?? null,
+    claimedAt: serverTimestamp(),
+  });
+  return true;
+}

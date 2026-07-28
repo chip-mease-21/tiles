@@ -1,0 +1,497 @@
+diff --git a/firestore.rules b/firestore.rules
+index 24f7dfa..272db90 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -77,6 +77,45 @@ service cloud.firestore {
+       return isMember(orgId) && memberRole(orgId) in ['admin', 'dlt', 'contributor'];
+     }
+ 
++    // ---------------------------------------------------------------- INVITES
++    //
++    // An invite is a seat assigned to an email address before that person has
++    // ever signed in. Claiming one is the only way a member document can be
++    // created by anybody other than the admin, and it can only ever produce the
++    // exact role that was already written down for that exact address.
++    //
++    // Signing in grants nothing on its own. An invite cannot mint an admin, so
++    // escalation stays a deliberate act on the members screen. And because
++    // create only applies when no document exists, somebody the admin has
++    // deactivated cannot quietly re-claim their way back in.
++    function myEmail() {
++      return request.auth.token.get('email', '');
++    }
++    function emailVerified() {
++      return request.auth.token.get('email_verified', false) == true;
++    }
++    function invitePath(orgId) {
++      return /databases/$(database)/documents/orgs/$(orgId)/invites/$(myEmail());
++    }
++    function invited(orgId) {
++      return get(invitePath(orgId)).data;
++    }
++    function claimingOwnInvite(orgId, uid) {
++      return uid == request.auth.uid
++        && myEmail() != ''
++        && emailVerified()
++        && exists(invitePath(orgId))
++        && invited(orgId).get('role', '') in ['dlt', 'contributor', 'campus']
++        && request.resource.data.get('role', '') == invited(orgId).get('role', '')
++        && request.resource.data.get('name', '') == invited(orgId).get('name', '')
++        && request.resource.data.get('campusId', null) == invited(orgId).get('campusId', null)
++        && request.resource.data.get('email', '') == myEmail()
++        && request.resource.data.get('active', false) == true
++        && request.resource.data.keys()
++             .hasOnly(['name', 'email', 'role', 'active', 'campusId', 'claimedAt'])
++        && request.resource.data.get('claimedAt', null) == request.time;
++    }
++
+     // The private user space sits outside /orgs, so it cannot infer the org from
+     // its own path. One church, one org id. If a second org ever exists, move
+     // this onto the profile document rather than widening the rule.
+@@ -242,7 +281,10 @@ service cloud.firestore {
+         // Reading your own uid's document leaks nothing.
+         allow read: if isEditor(orgId) || (signedIn() && uid == request.auth.uid);
+ 
+-        allow create: if isAdmin(orgId);
++        // Either the admin seats somebody by hand, or somebody claims the seat
++        // already assigned to their verified email address. Nothing else.
++        allow create: if isAdmin(orgId)
++          || (signedIn() && claimingOwnInvite(orgId, uid));
+ 
+         // An admin may not demote or deactivate themselves. There is no recovery
+         // path in these rules, so self lockout means opening the console.
+@@ -253,6 +295,19 @@ service cloud.firestore {
+         allow delete: if isAdmin(orgId) && uid != request.auth.uid;
+       }
+ 
++      // Pending invites, keyed by lowercase email address. A person may read the
++      // one addressed to them so the app can claim it on their behalf; they can
++      // never read anyone else's, and they can never write one at all.
++      match /invites/{email} {
++        allow read: if isEditor(orgId) || (signedIn() && email == myEmail());
++        allow create, update: if isAdmin(orgId)
++          && request.resource.data.get('email', '') == email
++          && request.resource.data.get('role', '') in ['dlt', 'contributor', 'campus']
++          && request.resource.data.keys()
++               .hasOnly(['name', 'email', 'role', 'campusId', 'invitedAt']);
++        allow delete: if isAdmin(orgId);
++      }
++
+       // Rocks. Editors change anything, stamped. Contributors change the status
+       // of a rock they own and nothing else.
+       match /rocks/{rockId} {
+diff --git a/rules.test.mjs b/rules.test.mjs
+index 2e54949..c87878b 100644
+--- a/rules.test.mjs
++++ b/rules.test.mjs
+@@ -82,6 +82,14 @@ await env.withSecurityRulesDisabled(async (ctx) => {
+   await setDoc(doc(db, `orgs/${ORG}/pulse/rachel`), { lastReviewOn: '2026-07-27', weekOf: '2026-07-27' });
+   await setDoc(doc(db, `orgs/${ORG}/shares/rachel__chip`), { ownerUid: 'rachel', ownerName: 'Rachel', withUid: 'chip' });
+   await setDoc(doc(db, `orgs/${ORG}/shares/gabe__sam`), { ownerUid: 'gabe', ownerName: 'Gabe', withUid: 'sam' });
++
++  // Invites: a seat assigned to an email before that person has ever signed in.
++  await setDoc(doc(db, `orgs/${ORG}/invites/newbie@thepointcville.com`), {
++    name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt', campusId: null });
++  // Seeded past the rules on purpose. An admin invite cannot be written through
++  // them, and this proves it cannot be claimed either if one ever appeared.
++  await setDoc(doc(db, `orgs/${ORG}/invites/boss@thepointcville.com`), {
++    name: 'Would Be Boss', email: 'boss@thepointcville.com', role: 'admin', campusId: null });
+ });
+ 
+ const chip = env.authenticatedContext('chip').firestore();
+@@ -94,6 +102,19 @@ const leaver = env.authenticatedContext('leaver').firestore();
+ const stranger = env.authenticatedContext('stranger').firestore();
+ const anon = env.unauthenticatedContext().firestore();
+ 
++// Signed in with a Google identity, carrying an email claim. None of these
++// people have a seat yet.
++const tok = (email, verified = true) => ({ email, email_verified: verified });
++const newbie    = env.authenticatedContext('u_newbie', tok('newbie@thepointcville.com')).firestore();
++const unverified = env.authenticatedContext('u_unver', tok('newbie@thepointcville.com', false)).firestore();
++const wouldbeboss = env.authenticatedContext('u_boss', tok('boss@thepointcville.com')).firestore();
++const walkin    = env.authenticatedContext('u_walkin', tok('random@gmail.com')).firestore();
++
++const seat = (extra = {}) => ({
++  name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt',
++  active: true, campusId: null, claimedAt: serverTimestamp(), ...extra,
++});
++
+ console.log('\nREAD ACCESS');
+ await t('editor reads all rocks', () => assertSucceeds(getDocs(collection(matt, `orgs/${ORG}/rocks`))));
+ await t('editor reads issues', () => assertSucceeds(getDocs(collection(gabe, `orgs/${ORG}/issues`))));
+@@ -311,6 +332,51 @@ await t('admin adds a member', () => assertSucceeds(
+ await t('admin changes a role', () => assertSucceeds(
+   updateDoc(doc(chip, `orgs/${ORG}/members/newguy`), { role: 'contributor' })));
+ 
++console.log('\nAN INVITE SEATS SOMEBODY WITHOUT THE ADMIN IN THE LOOP');
++await t('you can read the invite addressed to you', () => assertSucceeds(
++  getDoc(doc(newbie, `orgs/${ORG}/invites/newbie@thepointcville.com`))));
++await t("you cannot read somebody else's invite", () => assertFails(
++  getDoc(doc(newbie, `orgs/${ORG}/invites/boss@thepointcville.com`))));
++await t('a walk in cannot read an invite that is not theirs', () => assertFails(
++  getDoc(doc(walkin, `orgs/${ORG}/invites/newbie@thepointcville.com`))));
++await t('a non admin cannot write an invite', () => assertFails(
++  setDoc(doc(matt, `orgs/${ORG}/invites/friend@thepointcville.com`),
++    { name: 'Friend', email: 'friend@thepointcville.com', role: 'dlt', campusId: null })));
++await t('the admin writes an invite', () => assertSucceeds(
++  setDoc(doc(chip, `orgs/${ORG}/invites/friend@thepointcville.com`),
++    { name: 'Friend', email: 'friend@thepointcville.com', role: 'contributor', campusId: null })));
++await t('an invite cannot name the admin role', () => assertFails(
++  setDoc(doc(chip, `orgs/${ORG}/invites/other@thepointcville.com`),
++    { name: 'Other', email: 'other@thepointcville.com', role: 'admin', campusId: null })));
++await t('an invite cannot be addressed to a different email than its id', () => assertFails(
++  setDoc(doc(chip, `orgs/${ORG}/invites/one@thepointcville.com`),
++    { name: 'Two', email: 'two@thepointcville.com', role: 'dlt', campusId: null })));
++
++await t('a signed in stranger with no invite cannot seat themselves', () => assertFails(
++  setDoc(doc(walkin, `orgs/${ORG}/members/u_walkin`), seat({ email: 'random@gmail.com' }))));
++await t('an unverified email cannot claim an invite', () => assertFails(
++  setDoc(doc(unverified, `orgs/${ORG}/members/u_unver`), seat())));
++await t('you cannot claim a seat at a uid that is not yours', () => assertFails(
++  setDoc(doc(newbie, `orgs/${ORG}/members/somebody_else`), seat())));
++await t('you cannot claim a richer role than you were invited to', () => assertFails(
++  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat({ role: 'admin' }))));
++await t('you cannot smuggle an extra field into your seat', () => assertFails(
++  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat({ superuser: true }))));
++await t('the claim date must be server stamped', () => assertFails(
++  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat({ claimedAt: '2020-01-01' }))));
++await t('an admin invite cannot be claimed even if one exists', () => assertFails(
++  setDoc(doc(wouldbeboss, `orgs/${ORG}/members/u_boss`), {
++    name: 'Would Be Boss', email: 'boss@thepointcville.com', role: 'admin',
++    active: true, campusId: null, claimedAt: serverTimestamp() })));
++await t('an invited person claims their own seat', () => assertSucceeds(
++  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat())));
++// Once the seat exists, a repeat write is an update rather than a create, and
++// update is admin only. So a seat the admin switched off cannot be re-claimed.
++await t('a claimed seat cannot be re-created to undo a deactivation', () => assertFails(
++  setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat())));
++await t('and the newly seated person cannot promote themselves', () => assertFails(
++  updateDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), { role: 'admin' })));
++
+ console.log('\nEVERY PERSON KEEPS A PRIVATE ACCOUNT');
+ await t("editor is BLOCKED from Chip's Roles cards", () => assertFails(getDoc(doc(matt, 'users/chip/roles/r_finance'))));
+ await t("editor is BLOCKED from Chip's weekly reviews", () => assertFails(getDoc(doc(gabe, 'users/chip/reviews/w1'))));
+diff --git a/src/admin/MemberAdmin.tsx b/src/admin/MemberAdmin.tsx
+index fdd5b21..00b5708 100644
+--- a/src/admin/MemberAdmin.tsx
++++ b/src/admin/MemberAdmin.tsx
+@@ -3,15 +3,21 @@
+  * so it stays with the admin, and the security rules say so independently of
+  * whether this component is rendered.
+  *
+- * Firebase Auth uids only exist after a person signs in once, so seating
+- * someone is a two step move: they sign in, they read their uid off the empty
+- * seat screen and send it over, you paste it here. At this team size that is
+- * cheaper than a Cloud Function.
++ * Two ways in. An invite assigns a seat to an email address before that person
++ * has ever signed in, and the app claims it for them the first time they do.
++ * That is the normal path and it keeps the admin out of the loop entirely.
++ *
++ * Pasting a raw uid is the fallback for someone already signed in, or for an
++ * address that does not match the one on their Google account. Firebase uids
++ * only exist after a first sign in, which is exactly the round trip invites
++ * were added to remove.
+  */
+ import { useEffect, useState } from 'react';
+ import { useOrg } from '../context/OrgContext';
+-import { setMemberActive, upsertMember, watchMembers } from '../lib/org';
+-import type { Member, Role } from '../types/dlt';
++import {
++  deleteInvite, saveInvite, setMemberActive, upsertMember, watchInvites, watchMembers,
++} from '../lib/org';
++import type { Invite, Member, Role } from '../types/dlt';
+ import { Button, Card, Section } from '../dlt/ui';
+ 
+ const ROLES: { value: Role; label: string; blurb: string }[] = [
+@@ -24,14 +30,22 @@ const ROLES: { value: Role; label: string; blurb: string }[] = [
+ export function MemberAdmin() {
+   const { isAdmin, user } = useOrg();
+   const [members, setMembers] = useState<Member[]>([]);
++  const [invites, setInvites] = useState<Invite[]>([]);
+   const [draft, setDraft] = useState({ uid: '', name: '', email: '', role: 'dlt' as Role });
++  const [inv, setInv] = useState({ name: '', email: '', role: 'dlt' as Invite['role'] });
+   const [error, setError] = useState('');
++  const [invError, setInvError] = useState('');
+ 
+   useEffect(() => {
+     if (!isAdmin) return;
+     return watchMembers(setMembers);
+   }, [isAdmin]);
+ 
++  useEffect(() => {
++    if (!isAdmin) return;
++    return watchInvites(setInvites);
++  }, [isAdmin]);
++
+   if (!isAdmin) return null;
+ 
+   async function add() {
+@@ -48,6 +62,28 @@ export function MemberAdmin() {
+     }
+   }
+ 
++  async function invite() {
++    setInvError('');
++    const email = inv.email.trim().toLowerCase();
++    if (!inv.name.trim() || !email.includes('@')) {
++      setInvError('A name and a real email address are both required.');
++      return;
++    }
++    if (members.some((m) => m.email?.toLowerCase() === email)) {
++      setInvError('That address already has a seat.');
++      return;
++    }
++    try {
++      await saveInvite({ name: inv.name.trim(), email, role: inv.role, campusId: null });
++      setInv({ name: '', email: '', role: 'dlt' });
++    } catch (e) {
++      setInvError(e instanceof Error ? e.message : String(e));
++    }
++  }
++
++  // An invite whose person has since been seated has done its job.
++  const claimed = new Set(members.map((m) => m.email?.toLowerCase()).filter(Boolean));
++
+   return (
+     <div className="mx-auto max-w-3xl px-4 pb-24 pt-4">
+       <Section title="Members" hint="Who sees the board, and what they may change.">
+@@ -89,10 +125,74 @@ export function MemberAdmin() {
+         </Card>
+ 
+         <div className="mt-3">
+-          <Card title="Seat someone">
++          <Card title="Invited, waiting on a first sign in">
++            {invites.length === 0 ? (
++              <p className="px-3 py-3 text-sm text-stone-500">
++                Nobody is waiting. Add an address below and they are seated the moment they sign in.
++              </p>
++            ) : (
++              <ul className="divide-y divide-stone-100">
++                {invites.map((i) => (
++                  <li key={i.email} className="flex items-center gap-3 px-3 py-2.5">
++                    <div className="flex-1">
++                      <p className="text-sm font-medium text-stone-900">{i.name}</p>
++                      <p className="text-xs text-stone-500">{i.email}</p>
++                    </div>
++                    <span className="rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">
++                      {ROLES.find((r) => r.value === i.role)?.label ?? i.role}
++                    </span>
++                    <span className="text-xs text-stone-400">
++                      {claimed.has(i.email) ? 'claimed' : 'not signed in yet'}
++                    </span>
++                    <Button variant="ghost" onClick={() => void deleteInvite(i.email)}>Cancel</Button>
++                  </li>
++                ))}
++              </ul>
++            )}
++          </Card>
++        </div>
++
++        <div className="mt-3">
++          <Card title="Invite by email">
++            <div className="space-y-2 p-3">
++              <p className="text-xs text-stone-600">
++                They do not need to do anything first. Add the address on their church Google account and the
++                seat is waiting for them. An invite can never grant Admin, so promoting somebody stays a
++                deliberate act on this screen.
++              </p>
++              <input
++                value={inv.name}
++                onChange={(e) => setInv({ ...inv, name: e.target.value })}
++                placeholder="Display name"
++                className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm"
++              />
++              <input
++                value={inv.email}
++                onChange={(e) => setInv({ ...inv, email: e.target.value })}
++                placeholder="name@thepointcville.com"
++                className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm"
++              />
++              <select
++                value={inv.role}
++                onChange={(e) => setInv({ ...inv, role: e.target.value as Invite['role'] })}
++                className="w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 text-sm"
++              >
++                {ROLES.filter((r) => r.value !== 'admin').map((r) => (
++                  <option key={r.value} value={r.value}>{r.label}. {r.blurb}</option>
++                ))}
++              </select>
++              {invError && <p className="text-xs font-medium text-red-700">{invError}</p>}
++              <Button variant="brand" onClick={invite}>Save the invite</Button>
++            </div>
++          </Card>
++        </div>
++
++        <div className="mt-3">
++          <Card title="Or paste a uid">
+             <div className="space-y-2 p-3">
+               <p className="text-xs text-stone-600">
+-                Have them sign in once. The app shows them their uid on the empty seat screen. Paste it here.
++                The fallback, for somebody already signed in or whose Google address differs from the one you
++                invited. They read their uid off the empty seat screen.
+               </p>
+               {(['uid', 'name', 'email'] as const).map((field) => (
+                 <input
+diff --git a/src/context/OrgContext.tsx b/src/context/OrgContext.tsx
+index 54a36e0..321d06b 100644
+--- a/src/context/OrgContext.tsx
++++ b/src/context/OrgContext.tsx
+@@ -9,10 +9,10 @@
+  * Permission is still enforced in Firestore, not here. Hiding a button is a
+  * courtesy to the user, not a control.
+  */
+-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
++import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+ import { onAuthStateChanged, type User } from 'firebase/auth';
+ import { auth } from '../lib/firebase';
+-import { watchMember, watchSettings } from '../lib/org';
++import { claimSeat, watchMember, watchSettings } from '../lib/org';
+ import {
+   canEditEverything, canSeeBoard, type Member, type OrgSettings, type Role,
+ } from '../types/dlt';
+@@ -59,6 +59,19 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
+     return watchMember(user.uid, (m) => { setMember(m); setMemberReady(true); });
+   }, [user]);
+ 
++  // No seat, but perhaps one is waiting on their email address. Try once per
++  // signed in person and never again: a second attempt cannot succeed, because
++  // once the document exists the write is an update and update is admin only.
++  //
++  // A failure here is the normal case, not an error. Most people using Tiles
++  // have no invite and never will, so this stays silent.
++  const claimTried = useRef<string | null>(null);
++  useEffect(() => {
++    if (!user || !memberReady || member || claimTried.current === user.uid) return;
++    claimTried.current = user.uid;
++    void claimSeat(user.uid, user.email).catch(() => {});
++  }, [user, member, memberReady]);
++
+   // Settings live behind the same read gate as the rest of the board, so only
+   // subscribe once we know this person is allowed to see it.
+   const active = !!member?.active;
+diff --git a/src/dlt/AppShell.tsx b/src/dlt/AppShell.tsx
+index 7f6803c..6507cdc 100644
+--- a/src/dlt/AppShell.tsx
++++ b/src/dlt/AppShell.tsx
+@@ -75,7 +75,12 @@ export function EmptySeat() {
+     <div className="mx-auto max-w-md px-4 py-10 text-center">
+       <h2 className="text-base font-semibold text-stone-900">You are signed in</h2>
+       <p className="mt-2 text-sm text-stone-600">
+-        You do not have a seat on the DLT board yet. Send this id to Chip and he can add you.
++        You do not have a seat on the DLT board. If you are expecting one, ask Chip to invite
++        {user.email ? <> <span className="font-medium text-stone-800">{user.email}</span></> : ' the address on this account'}
++        {' '}and it will appear the next time you open this page.
++      </p>
++      <p className="mt-2 text-xs text-stone-500">
++        Only needed if that address does not match the one he invited:
+       </p>
+       <code className="mt-3 block break-all rounded-lg bg-stone-100 px-3 py-2 text-xs">{user.uid}</code>
+       <button
+diff --git a/src/lib/org.ts b/src/lib/org.ts
+index d2dcda5..f32121b 100644
+--- a/src/lib/org.ts
++++ b/src/lib/org.ts
+@@ -9,7 +9,7 @@
+  *   2. every path is built from one place, so nothing hardcodes a collection.
+  */
+ import {
+-  addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query,
++  addDoc, collection, deleteDoc, doc, getDoc, onSnapshot, orderBy, query,
+   serverTimestamp, setDoc, updateDoc, where, type DocumentData,
+   type QueryDocumentSnapshot, type Unsubscribe,
+ } from 'firebase/firestore';
+@@ -17,7 +17,7 @@ import {
+ // line to change.
+ import { auth, db } from './firebase';
+ import {
+-  ORG_ID, type Decision, type Issue, type Member, type OrgSettings,
++  ORG_ID, type Decision, type Invite, type Issue, type Member, type OrgSettings,
+   type Picture, type PriorityGroup, type CultureGroup, type Rock, type RockStatus,
+ } from '../types/dlt';
+ 
+@@ -27,6 +27,8 @@ export const paths = {
+   org: orgPath(),
+   members: orgPath('members'),
+   member: (uid: string) => orgPath('members', uid),
++  invites: orgPath('invites'),
++  invite: (email: string) => orgPath('invites', email.trim().toLowerCase()),
+   rocks: orgPath('rocks'),
+   rock: (id: string) => orgPath('rocks', id),
+   issues: orgPath('issues'),
+@@ -232,3 +234,51 @@ export function upsertMember(m: Member) {
+ 
+ export const setMemberActive = (memberUid: string, active: boolean) =>
+   updateDoc(doc(db, paths.member(memberUid)), { active, updatedAt: serverTimestamp() });
++
++/* ---------------------------------------------------------------- invites */
++
++/**
++ * Seating somebody used to need their Firebase uid, which only exists after
++ * they sign in once, which meant a round trip through the admin. An invite
++ * removes that: the admin writes the seat against an email address now, and the
++ * app claims it the first time that person signs in.
++ *
++ * The rules do the enforcing. This just carries the values.
++ */
++export function watchInvites(cb: (i: Invite[]) => void): Unsubscribe {
++  return onSnapshot(query(collection(db, paths.invites), orderBy('name')), (snap) =>
++    cb(snap.docs.map((d) => ({ ...d.data(), email: d.id } as Invite))));
++}
++
++export const saveInvite = (i: Invite) =>
++  setDoc(doc(db, paths.invite(i.email)), {
++    name: i.name.trim(),
++    email: i.email.trim().toLowerCase(),
++    role: i.role,
++    campusId: i.campusId ?? null,
++    invitedAt: serverTimestamp(),
++  });
++
++export const deleteInvite = (email: string) => deleteDoc(doc(db, paths.invite(email)));
++
++/**
++ * Claim the seat waiting for this email address, if there is one. Returns false
++ * when there is no invite, which is the ordinary case for anyone who simply
++ * uses Tiles and has nothing to do with the DLT board.
++ */
++export async function claimSeat(uid: string, email: string | null | undefined): Promise<boolean> {
++  const e = email?.trim().toLowerCase();
++  if (!e) return false;
++  const snap = await getDoc(doc(db, paths.invite(e)));
++  if (!snap.exists()) return false;
++  const inv = snap.data() as Invite;
++  await setDoc(doc(db, paths.member(uid)), {
++    name: inv.name,
++    email: e,
++    role: inv.role,
++    active: true,
++    campusId: inv.campusId ?? null,
++    claimedAt: serverTimestamp(),
++  });
++  return true;
++}
+diff --git a/src/types/dlt.ts b/src/types/dlt.ts
+index 1d3af57..cf91085 100644
+--- a/src/types/dlt.ts
++++ b/src/types/dlt.ts
+@@ -33,6 +33,20 @@ export interface Member {
+   campusId: string | null;
+ }
+ 
++/**
++ * A seat assigned to an email address before that person has ever signed in.
++ * Claiming one is the only way a member document gets created by anybody other
++ * than the admin, and it can only ever produce the role written here.
++ */
++export interface Invite {
++  /** Lowercase, and also the document id. */
++  email: string;
++  name: string;
++  /** Never 'admin'. Promotion stays a deliberate act on the members screen. */
++  role: Exclude<Role, 'admin'>;
++  campusId: string | null;
++}
++
+ export interface Rock {
+   id: string;
+   title: string;

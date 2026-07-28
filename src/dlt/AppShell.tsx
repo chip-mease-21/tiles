@@ -75,7 +75,12 @@ export function EmptySeat() {
     <div className="mx-auto max-w-md px-4 py-10 text-center">
       <h2 className="text-base font-semibold text-stone-900">You are signed in</h2>
       <p className="mt-2 text-sm text-stone-600">
-        You do not have a seat on the DLT board yet. Send this id to Chip and he can add you.
+        You do not have a seat on the DLT board. If you are expecting one, ask Chip to invite
+        {user.email ? <> <span className="font-medium text-stone-800">{user.email}</span></> : ' the address on this account'}
+        {' '}and it will appear the next time you open this page.
+      </p>
+      <p className="mt-2 text-xs text-stone-500">
+        Only needed if that address does not match the one he invited:
       </p>
       <code className="mt-3 block break-all rounded-lg bg-stone-100 px-3 py-2 text-xs">{user.uid}</code>
       <button

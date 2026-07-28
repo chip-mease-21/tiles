@@ -33,6 +33,20 @@ export interface Member {
   campusId: string | null;
 }
 
+/**
+ * A seat assigned to an email address before that person has ever signed in.
+ * Claiming one is the only way a member document gets created by anybody other
+ * than the admin, and it can only ever produce the role written here.
+ */
+export interface Invite {
+  /** Lowercase, and also the document id. */
+  email: string;
+  name: string;
+  /** Never 'admin'. Promotion stays a deliberate act on the members screen. */
+  role: Exclude<Role, 'admin'>;
+  campusId: string | null;
+}
+
 export interface Rock {
   id: string;
   title: string;
