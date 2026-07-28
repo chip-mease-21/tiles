@@ -11,7 +11,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore'
 import { db } from './firebase'
-import type { ColumnId, Entry, EntryType } from '../types'
+import { toColumn, type ColumnId, type Entry, type EntryType } from '../types'
 
 const COL = 'entries'
 
@@ -29,6 +29,7 @@ export function useEntries(userId: string | undefined) {
         return {
           id: d.id,
           ...data,
+          column: toColumn(data.column),
           tags: data.tags ?? [],
           tasks: data.tasks ?? []
         }
@@ -52,7 +53,7 @@ export async function createEntry(
     type: partial.type ?? 'note',
     title: partial.title ?? '',
     body: partial.body ?? '',
-    column: partial.column ?? ('notes' as ColumnId),
+    column: partial.column ?? ('inbox' as ColumnId),
     position: partial.position ?? now, // newest lands at the bottom by default
     tags: partial.tags ?? [],
     dueDate: partial.dueDate ?? null,

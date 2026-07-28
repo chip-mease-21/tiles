@@ -108,15 +108,10 @@ export default function BoardColumns({
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
   const byColumn = useMemo(() => {
-    const map: Record<ColumnId, Entry[]> = {
-      inbox: [],
-      notes: [],
-      today: [],
-      this_week: [],
-      this_month: [],
-      next_month: [],
-      someday: []
-    }
+    // Derived from COLUMNS so adding or retiring a column is a one line change.
+    const map = Object.fromEntries(
+      COLUMNS.map((c) => [c.id, [] as Entry[]])
+    ) as Record<ColumnId, Entry[]>
     for (const e of entries) map[e.column]?.push(e)
     for (const c of COLUMNS) map[c.id] = sortEntries(map[c.id], sorts[c.id])
     return map

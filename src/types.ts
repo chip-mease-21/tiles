@@ -1,6 +1,5 @@
 export type ColumnId =
   | 'inbox'
-  | 'notes'
   | 'today'
   | 'this_week'
   | 'this_month'
@@ -9,13 +8,24 @@ export type ColumnId =
 
 export const COLUMNS: { id: ColumnId; label: string }[] = [
   { id: 'inbox', label: 'Inbox' },
-  { id: 'notes', label: 'Notes' },
   { id: 'today', label: 'Today' },
   { id: 'this_week', label: 'This Week' },
   { id: 'this_month', label: 'This Month' },
   { id: 'next_month', label: 'Next Month' },
   { id: 'someday', label: 'Someday' }
 ]
+
+const COLUMN_IDS = new Set<string>(COLUMNS.map((c) => c.id))
+
+// Retired columns leave their entries behind. Rather than let those entries
+// vanish from a board that no longer has a place for them, anything pointing at
+// a column that no longer exists is read as Inbox and can be re-filed by hand.
+// Nothing is deleted and nothing is silently lost.
+export function toColumn(value: unknown): ColumnId {
+  return typeof value === 'string' && COLUMN_IDS.has(value)
+    ? (value as ColumnId)
+    : 'inbox'
+}
 
 export type EntryType = 'note' | 'todo'
 

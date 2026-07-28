@@ -15,7 +15,6 @@ import Login from './components/Login'
 
 const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
   inbox: 'manual',
-  notes: 'manual',
   today: 'due',
   this_week: 'due',
   this_month: 'due',
@@ -82,15 +81,8 @@ export default function TilesApp() {
     [entries, selectedTags, search, showArchived]
   )
   const counts = useMemo(() => {
-    const m = {
-      inbox: 0,
-      notes: 0,
-      today: 0,
-      this_week: 0,
-      this_month: 0,
-      next_month: 0,
-      someday: 0
-    } as Record<ColumnId, number>
+    // Derived from COLUMNS so adding or retiring a column is a one line change.
+    const m = Object.fromEntries(COLUMNS.map((c) => [c.id, 0])) as Record<ColumnId, number>
     for (const e of filtered) m[e.column] = (m[e.column] || 0) + 1
     return m
   }, [filtered])

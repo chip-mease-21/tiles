@@ -1,0 +1,122 @@
+diff --git a/src/TilesApp.tsx b/src/TilesApp.tsx
+index 628c258..8740771 100644
+--- a/src/TilesApp.tsx
++++ b/src/TilesApp.tsx
+@@ -15,7 +15,6 @@ import Login from './components/Login'
+ 
+ const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
+   inbox: 'manual',
+-  notes: 'manual',
+   today: 'due',
+   this_week: 'due',
+   this_month: 'due',
+@@ -82,15 +81,8 @@ export default function TilesApp() {
+     [entries, selectedTags, search, showArchived]
+   )
+   const counts = useMemo(() => {
+-    const m = {
+-      inbox: 0,
+-      notes: 0,
+-      today: 0,
+-      this_week: 0,
+-      this_month: 0,
+-      next_month: 0,
+-      someday: 0
+-    } as Record<ColumnId, number>
++    // Derived from COLUMNS so adding or retiring a column is a one line change.
++    const m = Object.fromEntries(COLUMNS.map((c) => [c.id, 0])) as Record<ColumnId, number>
+     for (const e of filtered) m[e.column] = (m[e.column] || 0) + 1
+     return m
+   }, [filtered])
+diff --git a/src/components/BoardColumns.tsx b/src/components/BoardColumns.tsx
+index 320b1f2..7d74452 100644
+--- a/src/components/BoardColumns.tsx
++++ b/src/components/BoardColumns.tsx
+@@ -108,15 +108,10 @@ export default function BoardColumns({
+   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+ 
+   const byColumn = useMemo(() => {
+-    const map: Record<ColumnId, Entry[]> = {
+-      inbox: [],
+-      notes: [],
+-      today: [],
+-      this_week: [],
+-      this_month: [],
+-      next_month: [],
+-      someday: []
+-    }
++    // Derived from COLUMNS so adding or retiring a column is a one line change.
++    const map = Object.fromEntries(
++      COLUMNS.map((c) => [c.id, [] as Entry[]])
++    ) as Record<ColumnId, Entry[]>
+     for (const e of entries) map[e.column]?.push(e)
+     for (const c of COLUMNS) map[c.id] = sortEntries(map[c.id], sorts[c.id])
+     return map
+diff --git a/src/lib/useEntries.ts b/src/lib/useEntries.ts
+index 835e861..88e0ceb 100644
+--- a/src/lib/useEntries.ts
++++ b/src/lib/useEntries.ts
+@@ -11,7 +11,7 @@ import {
+   serverTimestamp
+ } from 'firebase/firestore'
+ import { db } from './firebase'
+-import type { ColumnId, Entry, EntryType } from '../types'
++import { toColumn, type ColumnId, type Entry, type EntryType } from '../types'
+ 
+ const COL = 'entries'
+ 
+@@ -29,6 +29,7 @@ export function useEntries(userId: string | undefined) {
+         return {
+           id: d.id,
+           ...data,
++          column: toColumn(data.column),
+           tags: data.tags ?? [],
+           tasks: data.tasks ?? []
+         }
+@@ -52,7 +53,7 @@ export async function createEntry(
+     type: partial.type ?? 'note',
+     title: partial.title ?? '',
+     body: partial.body ?? '',
+-    column: partial.column ?? ('notes' as ColumnId),
++    column: partial.column ?? ('inbox' as ColumnId),
+     position: partial.position ?? now, // newest lands at the bottom by default
+     tags: partial.tags ?? [],
+     dueDate: partial.dueDate ?? null,
+diff --git a/src/types.ts b/src/types.ts
+index f77696c..9d4d5fd 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -1,6 +1,5 @@
+ export type ColumnId =
+   | 'inbox'
+-  | 'notes'
+   | 'today'
+   | 'this_week'
+   | 'this_month'
+@@ -9,7 +8,6 @@ export type ColumnId =
+ 
+ export const COLUMNS: { id: ColumnId; label: string }[] = [
+   { id: 'inbox', label: 'Inbox' },
+-  { id: 'notes', label: 'Notes' },
+   { id: 'today', label: 'Today' },
+   { id: 'this_week', label: 'This Week' },
+   { id: 'this_month', label: 'This Month' },
+@@ -17,6 +15,18 @@ export const COLUMNS: { id: ColumnId; label: string }[] = [
+   { id: 'someday', label: 'Someday' }
+ ]
+ 
++const COLUMN_IDS = new Set<string>(COLUMNS.map((c) => c.id))
++
++// Retired columns leave their entries behind. Rather than let those entries
++// vanish from a board that no longer has a place for them, anything pointing at
++// a column that no longer exists is read as Inbox and can be re-filed by hand.
++// Nothing is deleted and nothing is silently lost.
++export function toColumn(value: unknown): ColumnId {
++  return typeof value === 'string' && COLUMN_IDS.has(value)
++    ? (value as ColumnId)
++    : 'inbox'
++}
++
+ export type EntryType = 'note' | 'todo'
+ 
+ export interface Task {
