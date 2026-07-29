@@ -484,26 +484,24 @@ export interface DayCell {
  */
 export function calendarWeeks(routines: Routine[], today: string, weeks = 3): DayCell[][] {
   const start = addDays(today, -at(today).getDay());
-  // Daily work is not listed in a cell — it lands in every one, which buries the
-  // periodic things that actually collide, and collisions are the only reason to
-  // look at a calendar. It is still real time, so it counts toward the total.
-  const dailies = routines.filter(isDaily);
   return Array.from({ length: weeks }, (_, w) =>
     Array.from({ length: 7 }, (_, d) => {
       const date = addDays(start, w * 7 + d);
       const past = date < today;
-      const items = past
-        ? []
-        : routines
-            .filter((r) => !isDaily(r) && occursOn(r, date))
-            .map((r) => ({ r, done: isDone(r, date) }));
-      const dailyLeft = past ? [] : dailies.filter((r) => !isDone(r, date));
+      // Daily work sits in every square like everything else. It was hidden here
+      // once, on the argument that repeating it 35 times buries the periodic
+      // things that collide. True, but a routine you cannot find on the calendar
+      // reads as a routine that did not save, and that costs more than clutter.
+      // The periodic items lead each cell so collisions still read first.
+      const hits = past ? [] : routines.filter((r) => occursOn(r, date));
+      const items = [...hits.filter((r) => !isDaily(r)), ...hits.filter(isDaily)]
+        .map((r) => ({ r, done: isDone(r, date) }));
       return {
         date,
         past,
         isToday: date === today,
         items,
-        minutes: minutesOf(items.filter((i) => !i.done).map((i) => i.r)) + minutesOf(dailyLeft),
+        minutes: minutesOf(items.filter((i) => !i.done).map((i) => i.r)),
       };
     }),
   );

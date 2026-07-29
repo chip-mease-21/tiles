@@ -118,7 +118,6 @@ export function Rhythm() {
 
           <Calendar
             weeks={weeks}
-            dailies={dailies}
             range={range}
             onRange={setRange}
             onPick={(r, date) => setLogging({ r, date })}
@@ -183,18 +182,13 @@ const longDay = (iso: string) =>
  * wasted the whole width of the screen.
  */
 function Calendar({
-  weeks, dailies, range, onRange, onPick,
+  weeks, range, onRange, onPick,
 }: {
   weeks: DayCell[][];
-  dailies: Routine[];
   range: 'weeks' | 'month';
   onRange: (r: 'weeks' | 'month') => void;
   onPick: (r: Routine, date: string) => void;
 }) {
-  // Daily work is not listed in a cell but it is real time, so it counts toward
-  // the day's total. The footnote says so, rather than leaving you to wonder why
-  // one item reads as forty minutes.
-  const dailyMins = minutesOf(dailies);
   const check = (
     <svg viewBox="0 0 12 12" className="h-2.5 w-2.5 shrink-0" aria-hidden>
       <path d="M2 6.4 4.6 9 10 3.2" fill="none" stroke="currentColor" strokeWidth="1.8"
@@ -306,13 +300,6 @@ function Calendar({
             })}
           </div>
         ))}
-        {dailies.length > 0 && (
-          <p className="border-t border-stone-200 bg-stone-50 px-3 py-2 text-[11px] text-stone-500">
-            Every day, so not shown above but counted in each day's total:{' '}
-            {dailies.map((r) => r.title).join(', ')}
-            {dailyMins > 0 && <> · {fmtMins(dailyMins)} a day</>}.
-          </p>
-        )}
       </div>
     </section>
   );
