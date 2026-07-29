@@ -6,6 +6,8 @@ import { sortTags } from '../lib/sort'
 import { tagColor } from '../lib/colors'
 import { updateEntry, deleteEntry } from '../lib/useEntries'
 import { useEntryScope } from '../lib/entryScope'
+import { useOrg } from '../context/OrgContext'
+import { HT_NAME, moveToSpace } from '../ht/space'
 import type { TagCategories } from '../lib/useUserData'
 
 export default function TileEditor({
@@ -20,6 +22,8 @@ export default function TileEditor({
   onClose: () => void
 }) {
   const scope = useEntryScope()
+  const { space } = useOrg()
+  const [moving, setMoving] = useState(false)
   const [local, setLocal] = useState<Entry>(entry)
   const [tagInput, setTagInput] = useState('')
 
@@ -66,6 +70,20 @@ export default function TileEditor({
     void id
     updateEntry(scope, entry.id, patch)
     onClose()
+  }
+
+  // Only offered on your private board, and only if you are actually in the
+  // space. One way for now: there is no move back, because the tile stops being
+  // only yours the moment it lands over there.
+  async function moveToHt() {
+    if (!space) return
+    setMoving(true)
+    try {
+      await moveToSpace(local, scope.me)
+      onClose()
+    } finally {
+      setMoving(false)
+    }
   }
 
   function archiveAndClose(value: boolean) {
@@ -249,6 +267,15 @@ export default function TileEditor({
             >
               {local.archived ? 'Unarchive' : 'Archive'}
             </button>
+            {!scope.shared && space && (
+              <button
+                onClick={() => void moveToHt()}
+                disabled={moving}
+                className="text-xs text-muted hover:text-text disabled:opacity-50"
+              >
+                {moving ? 'Moving' : `Move to ${HT_NAME}`}
+              </button>
+            )}
             <button
               onClick={() => {
                 deleteEntry(scope, entry.id)

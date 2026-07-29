@@ -11,11 +11,12 @@
  * automatically the first time they sign in, so nobody has to send a uid.
  */
 import {
-  collection, deleteDoc, doc, getDoc, onSnapshot, orderBy, query,
-  serverTimestamp, setDoc, type Unsubscribe,
+  collection, deleteDoc, doc, getDoc, getDocs, onSnapshot, orderBy, query,
+  serverTimestamp, setDoc, where, type Unsubscribe,
 } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import type { EntryScope, ScopePerson } from '../lib/entryScope'
+import type { Entry } from '../types'
 
 export const HT_SPACE = 'ht';
 export const HT_NAME = 'Heart and Treasure';
@@ -99,3 +100,34 @@ export const htScope = (uid: string, people: ScopePerson[]): EntryScope => ({
   people,
   me: uid,
 });
+
+/* ------------------------------------------------- bringing work across */
+
+/**
+ * Move one tile from your private board into the shared space.
+ *
+ * Written in this order on purpose: create in the space first, delete from your
+ * board second. If the second step fails you are left with a duplicate, which
+ * is annoying. The other order would leave you with nothing, which is not.
+ *
+ * The document keeps its id, so re-running this is a no-op rather than a way to
+ * end up with two of everything.
+ *
+ * The tile arrives assigned to you, because it already was yours. Hand it over
+ * afterwards if that is what you meant.
+ */
+export async function moveToSpace(entry: Entry, myUid: string): Promise<void> {
+  const { id, ...rest } = entry;
+  await setDoc(doc(db, `${p.entries}/${id}`), {
+    ...rest,
+    ownerUid: myUid,
+    updatedAt: serverTimestamp(),
+  });
+  await deleteDoc(doc(db, `entries/${id}`));
+}
+
+/** Your private tiles, read once, for the bring-across panel. */
+export async function readMyTiles(uid: string): Promise<Entry[]> {
+  const snap = await getDocs(query(collection(db, 'entries'), where('userId', '==', uid)));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Entry));
+}
