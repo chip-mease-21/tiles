@@ -14,14 +14,38 @@
  * create an item to clear; it widens a gap.
  */
 
+/** The original four. Kept only to read routines written before `repeat` existed. */
 export type Cadence = 'daily' | 'weekly' | 'monthly' | 'quarterly';
 
-export const CADENCE_LABEL: Record<Cadence, string> = {
-  daily: 'Daily',
-  weekly: 'Weekly',
-  monthly: 'Monthly',
-  quarterly: 'Quarterly',
+/**
+ * How often a routine comes round.
+ *
+ * An interval alone is not enough to place an occurrence on a calendar. "Every
+ * other Tuesday" has two possible answers on any given week, so anything with an
+ * interval above one carries `from`: a real date the pattern is measured from.
+ * Without it the phase would drift every time the code changed, and a routine
+ * that quietly moves week is worse than one that never existed.
+ */
+export type Repeat =
+  | { kind: 'daily' }
+  | { kind: 'weeks'; every: number; weekday: number; from: string }
+  | { kind: 'months'; every: number; day: number; from: string }
+  /** Two fixed days of the month. Payroll and cash live here; nothing else fits. */
+  | { kind: 'twiceMonthly'; days: [number, number] }
+  /** Second Tuesday and friends. `nth` 1-4, or 5 meaning the last one. */
+  | { kind: 'weekdayOfMonth'; every: number; nth: number; weekday: number; from: string };
+
+export type RepeatKind = Repeat['kind'];
+
+export const REPEAT_LABEL: Record<RepeatKind, string> = {
+  daily: 'Every day',
+  weeks: 'Weeks',
+  months: 'Months',
+  twiceMonthly: 'Twice a month',
+  weekdayOfMonth: 'A weekday each month',
 };
+
+export const NTH_LABEL = ['First', 'Second', 'Third', 'Fourth', 'Last'];
 
 export const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -40,6 +64,25 @@ export interface Routine {
    * silently skips February.
    */
   anchor: number | null;
+  /**
+   * The repeat rule. Absent on routines written before this existed, which are
+   * read from `cadence` and `anchor` instead — see `repeatOf`. Nothing is
+   * rewritten in place; a routine converts the first time you save it.
+   */
+  repeat?: Repeat;
+  /**
+   * The day the routine came into existence. Nothing lands before it.
+   *
+   * Without this, a rule applies backwards forever: add "every other Tuesday"
+   * today and the routine is instantly eight days late for a Tuesday you never
+   * agreed to. A gap you did not have is worse than no history at all — it
+   * teaches you to ignore the late marker, which is the only thing on the page
+   * that has to mean something.
+   *
+   * Absent on routines written before this existed. Those keep their real
+   * history, which is what you want: the gap on those is a gap you actually had.
+   */
+  startOn?: string;
   roleId: string | null;
   link: string | null;
   lastDoneOn: string | null;
@@ -112,18 +155,132 @@ export function addDays(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Where the cadence alone says it lands, before any one-off move. */
-function baseOccursOn(r: Routine, iso: string): boolean {
-  const d = at(iso);
+/** A fixed January so a legacy quarterly still means Jan, Apr, Jul and Oct. */
+const QUARTER_EPOCH = '2026-01-01';
+
+/**
+ * The repeat rule for a routine, converting the old two-field shape on the fly.
+ *
+ * Reading rather than migrating is deliberate. A migration script that runs
+ * against live data has to be right the first time; a reader can be fixed and
+ * redeployed, and the original fields are still sitting there untouched.
+ */
+export function repeatOf(r: Routine): Repeat {
+  if (r.repeat) return r.repeat;
   switch (r.cadence) {
     case 'daily':
-      return true;
-    case 'weekly':
-      return d.getDay() === (r.anchor ?? 1);
+      return { kind: 'daily' };
     case 'monthly':
-      return d.getDate() === (r.anchor ?? 1);
+      return { kind: 'months', every: 1, day: r.anchor ?? 1, from: QUARTER_EPOCH };
     case 'quarterly':
-      return d.getDate() === (r.anchor ?? 1) && d.getMonth() % 3 === 0;
+      return { kind: 'months', every: 3, day: r.anchor ?? 1, from: QUARTER_EPOCH };
+    default:
+      return { kind: 'weeks', every: 1, weekday: r.anchor ?? 1, from: QUARTER_EPOCH };
+  }
+}
+
+export const isDaily = (r: Routine) => repeatOf(r).kind === 'daily';
+
+/** A bare routine carrying only a repeat rule, for previewing dates in the editor. */
+export const previewOf = (repeat: Repeat): Routine => ({
+  id: '', title: '', cadence: 'weekly', anchor: null, repeat,
+  roleId: null, link: null, lastDoneOn: null, lastOutcome: null, lastNote: '',
+  minutes: null, shifts: {}, done: {}, order: 0, active: true,
+});
+
+/**
+ * Move which week or month the pattern falls on, without changing the interval.
+ *
+ * "Every other Tuesday" is two different schedules depending on where you start,
+ * and only you know which one you meant.
+ */
+export function shiftPhase(rep: Repeat, steps: number): Repeat {
+  if (rep.kind === 'weeks') return { ...rep, from: addDays(rep.from, 7 * steps) };
+  if (rep.kind === 'months' || rep.kind === 'weekdayOfMonth') {
+    const d = at(rep.from);
+    // Land on the 15th first: adding a month to the 31st lands in the month
+    // after next, which would silently move the phase by two.
+    d.setDate(15);
+    d.setMonth(d.getMonth() + steps);
+    return { ...rep, from: d.toISOString().slice(0, 10) };
+  }
+  return rep;
+}
+
+/** The next few dates a rule produces. The editor shows these instead of explaining. */
+export function nextDates(rep: Repeat, from: string, count = 3): string[] {
+  const stub = previewOf(rep);
+  const out: string[] = [];
+  let cursor = addDays(from, -1);
+  for (let i = 0; i < count; i += 1) {
+    const next = nextOccurrenceAfter(stub, cursor);
+    if (!next) break;
+    out.push(next);
+    cursor = next;
+  }
+  return out;
+}
+
+/** The old two-field shape, written alongside `repeat` so a rollback still reads. */
+export function legacyCadence(rep: Repeat): Cadence {
+  if (rep.kind === 'daily') return 'daily';
+  if (rep.kind === 'weeks') return 'weekly';
+  if (rep.kind === 'months' && rep.every === 3) return 'quarterly';
+  return 'monthly';
+}
+
+export function legacyAnchor(rep: Repeat): number | null {
+  switch (rep.kind) {
+    case 'daily': return null;
+    case 'weeks': return rep.weekday;
+    case 'months': return rep.day;
+    case 'twiceMonthly': return rep.days[0];
+    case 'weekdayOfMonth': return null;
+  }
+}
+
+const startOfWeek = (iso: string) => addDays(iso, -at(iso).getDay());
+
+const weeksBetween = (fromIso: string, toIso: string) =>
+  Math.round(daysBetween(startOfWeek(fromIso), startOfWeek(toIso)) / 7);
+
+function monthsBetween(fromIso: string, toIso: string): number {
+  const a = at(fromIso);
+  const b = at(toIso);
+  return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+}
+
+/** Modulo that behaves for dates before the phase date, which % does not. */
+const onBeat = (n: number, every: number) => every <= 1 || ((n % every) + every) % every === 0;
+
+/** Which occurrence of its weekday this date is within its month: 1-4, or 5 for the last. */
+function nthWeekdayIn(iso: string): { nth: number; isLast: boolean } {
+  const d = at(iso);
+  const nth = Math.floor((d.getDate() - 1) / 7) + 1;
+  const next = new Date(d.getTime());
+  next.setDate(d.getDate() + 7);
+  return { nth, isLast: next.getMonth() !== d.getMonth() };
+}
+
+/** Where the repeat rule alone says it lands, before any one-off move. */
+function baseOccursOn(r: Routine, iso: string): boolean {
+  const rep = repeatOf(r);
+  const d = at(iso);
+  switch (rep.kind) {
+    case 'daily':
+      return true;
+    case 'weeks':
+      return d.getDay() === rep.weekday && onBeat(weeksBetween(rep.from, iso), rep.every);
+    case 'months':
+      return d.getDate() === rep.day && onBeat(monthsBetween(rep.from, iso), rep.every);
+    case 'twiceMonthly':
+      return d.getDate() === rep.days[0] || d.getDate() === rep.days[1];
+    case 'weekdayOfMonth': {
+      if (d.getDay() !== rep.weekday) return false;
+      const { nth, isLast } = nthWeekdayIn(iso);
+      const hit = rep.nth >= 5 ? isLast : nth === rep.nth;
+      return hit && onBeat(monthsBetween(rep.from, iso), rep.every);
+    }
   }
 }
 
@@ -132,6 +289,7 @@ export function occursOn(r: Routine, iso: string): boolean {
   const shifts = r.shifts ?? {};
   if (shifts[iso]) return false;
   for (const to of Object.values(shifts)) if (to === iso) return true;
+  if (r.startOn && iso < r.startOn) return false;
   return baseOccursOn(r, iso);
 }
 
@@ -252,14 +410,51 @@ export function sinceLabel(r: Routine, today: string): string {
   return `done ${gap} days ago`;
 }
 
+export function ordinal(n: number): string {
+  if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
+  const suffix = n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th';
+  return `${n}${suffix}`;
+}
+
+/**
+ * How the repeat reads on a row.
+ *
+ * The common intervals get their own words, because "every 3 months" is what a
+ * computer calls it and "quarterly" is what you call it. Anything unusual falls
+ * back to plain counting rather than being forced into a name nobody uses.
+ */
 export function anchorLabel(r: Routine): string {
-  if (r.cadence === 'daily') return 'every day';
-  if (r.cadence === 'weekly') return `${WEEKDAYS[r.anchor ?? 1]}s`;
-  const n = r.anchor ?? 1;
-  const suffix = n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
-  return r.cadence === 'monthly'
-    ? `${n}${suffix} of the month`
-    : `${n}${suffix} of Jan, Apr, Jul, Oct`;
+  const rep = repeatOf(r);
+  switch (rep.kind) {
+    case 'daily':
+      return 'every day';
+    case 'weeks': {
+      const day = WEEKDAYS[rep.weekday] ?? 'Monday';
+      if (rep.every <= 1) return `${day}s`;
+      if (rep.every === 2) return `every other ${day}`;
+      return `every ${rep.every} weeks on ${day}`;
+    }
+    case 'months': {
+      const day = `${ordinal(rep.day)} of the month`;
+      if (rep.every <= 1) return day;
+      if (rep.every === 2) return `${ordinal(rep.day)}, every other month`;
+      if (rep.every === 3) return `${ordinal(rep.day)}, quarterly`;
+      if (rep.every === 6) return `${ordinal(rep.day)}, twice a year`;
+      if (rep.every === 12) return `${ordinal(rep.day)}, once a year`;
+      return `${ordinal(rep.day)}, every ${rep.every} months`;
+    }
+    case 'twiceMonthly': {
+      const [a, b] = [...rep.days].sort((x, y) => x - y);
+      return `${ordinal(a)} and ${ordinal(b)} of the month`;
+    }
+    case 'weekdayOfMonth': {
+      const nth = (NTH_LABEL[Math.min(rep.nth, 5) - 1] ?? 'First').toLowerCase();
+      const day = WEEKDAYS[rep.weekday] ?? 'Monday';
+      if (rep.every <= 1) return `${nth} ${day} of the month`;
+      if (rep.every === 3) return `${nth} ${day}, quarterly`;
+      return `${nth} ${day}, every ${rep.every} months`;
+    }
+  }
 }
 
 export interface DayItemCell {
@@ -292,7 +487,7 @@ export function calendarWeeks(routines: Routine[], today: string, weeks = 3): Da
   // Daily work is not listed in a cell — it lands in every one, which buries the
   // periodic things that actually collide, and collisions are the only reason to
   // look at a calendar. It is still real time, so it counts toward the total.
-  const dailies = routines.filter((r) => r.cadence === 'daily');
+  const dailies = routines.filter(isDaily);
   return Array.from({ length: weeks }, (_, w) =>
     Array.from({ length: 7 }, (_, d) => {
       const date = addDays(start, w * 7 + d);
@@ -300,7 +495,7 @@ export function calendarWeeks(routines: Routine[], today: string, weeks = 3): Da
       const items = past
         ? []
         : routines
-            .filter((r) => r.cadence !== 'daily' && occursOn(r, date))
+            .filter((r) => !isDaily(r) && occursOn(r, date))
             .map((r) => ({ r, done: isDone(r, date) }));
       const dailyLeft = past ? [] : dailies.filter((r) => !isDone(r, date));
       return {
@@ -335,7 +530,7 @@ export function comingUp(routines: Routine[], today: string, days = 21) {
   for (let i = 1; i <= days; i += 1) {
     const date = addDays(today, i);
     for (const r of routines) {
-      if (r.cadence !== 'daily' && occursOn(r, date)) {
+      if (!isDaily(r) && occursOn(r, date)) {
         out.push({ date, routine: r, done: isDone(r, date) });
       }
     }

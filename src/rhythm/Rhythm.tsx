@@ -10,7 +10,7 @@
  * Private to each person. Nothing here is shared and there is no setting to
  * share it.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useOrg } from '../context/OrgContext';
 import {
   deleteRoutine, logRoutine, moveOccurrence, saveRoutine, unlogOccurrence, watchRoutines,
@@ -18,13 +18,14 @@ import {
 import { watchRoles } from '../lib/me';
 import { todayIso, type Role } from '../types/me';
 import {
-  CADENCE_LABEL, WEEKDAYS, anchorLabel, calendarWeeks, doneOn, dueNow, dueOccurrence, overdueBy,
+  NTH_LABEL, REPEAT_LABEL, WEEKDAYS, anchorLabel, calendarWeeks, doneOn, dueNow, dueOccurrence,
+  isDaily, legacyAnchor, legacyCadence, nextDates, overdueBy, repeatOf, shiftPhase,
   comingUp, fmtMins, minutesOf, safeLinkOf, sinceLabel, stateOf,
-  type Cadence, type DayCell, type Outcome, type Routine,
+  type DayCell, type Outcome, type Repeat, type RepeatKind, type Routine,
 } from '../types/rhythm';
 import { Button } from '../dlt/ui';
 
-const CADENCES: Cadence[] = ['daily', 'weekly', 'monthly', 'quarterly'];
+const KINDS: RepeatKind[] = ['daily', 'weeks', 'months', 'twiceMonthly', 'weekdayOfMonth'];
 const newId = () => `r_${Math.random().toString(36).slice(2, 10)}`;
 
 export function Rhythm() {
@@ -54,7 +55,7 @@ export function Rhythm() {
     [live, today, range],
   );
   const upcoming = useMemo(() => comingUp(live, today, 21), [live, today]);
-  const dailies = live.filter((r) => r.cadence === 'daily');
+  const dailies = live.filter(isDaily);
 
   const roleName = (id: string | null) => roles.find((x) => x.id === id)?.name ?? '';
 
@@ -570,18 +571,189 @@ const today = () => todayIso();
 const shortDay = (iso: string) =>
   new Date(iso + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
+const Pill = ({ on, children, onClick }: {
+  on: boolean; children: ReactNode; onClick: () => void;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`rounded-full px-3 py-1 text-xs ${
+      on ? 'bg-stone-900 font-semibold text-white' : 'border border-stone-300 bg-white text-stone-600'
+    }`}
+  >
+    {children}
+  </button>
+);
+
+const Num = ({ value, min, max, onChange, width = 'w-16' }: {
+  value: number; min: number; max: number; onChange: (n: number) => void; width?: string;
+}) => (
+  <input
+    type="number"
+    min={min}
+    max={max}
+    value={value}
+    onChange={(e) => onChange(Math.min(max, Math.max(min, Number(e.target.value) || min)))}
+    className={`${width} rounded-xl border border-stone-300 bg-stone-50 px-2.5 py-1.5 text-sm`}
+  />
+);
+
+/**
+ * How often, as a rule rather than a menu.
+ *
+ * The interval is a number you type, so every other week and every five weeks
+ * cost the same to express and nobody has to come back to me for the next one.
+ *
+ * Under it: the actual next three dates. An interval above one is ambiguous —
+ * which Tuesday? — and no wording fixes that. Showing the dates does, and it
+ * turns the phase control from a concept into "no, the other week".
+ */
+function RepeatPicker({ value, onChange }: { value: Repeat; onChange: (r: Repeat) => void }) {
+  const today = todayIso();
+  const preview = nextDates(value, today, 3);
+  const phased = value.kind === 'weeks' || value.kind === 'months' || value.kind === 'weekdayOfMonth';
+  const spaced = phased && value.every > 1;
+
+  function pick(kind: RepeatKind) {
+    if (kind === value.kind) return;
+    const from = todayIso();
+    onChange(
+      kind === 'daily' ? { kind: 'daily' }
+      : kind === 'weeks' ? { kind: 'weeks', every: 1, weekday: 1, from }
+      : kind === 'months' ? { kind: 'months', every: 1, day: 1, from }
+      : kind === 'twiceMonthly' ? { kind: 'twiceMonthly', days: [1, 15] }
+      : { kind: 'weekdayOfMonth', every: 1, nth: 2, weekday: 2, from },
+    );
+  }
+
+  return (
+    <>
+      <p className="mb-1 text-xs font-medium text-stone-500">How often</p>
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        {KINDS.map((k) => (
+          <Pill key={k} on={value.kind === k} onClick={() => pick(k)}>{REPEAT_LABEL[k]}</Pill>
+        ))}
+      </div>
+
+      {value.kind === 'weeks' && (
+        <>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-stone-600">Every</span>
+            <Num value={value.every} min={1} max={26} onChange={(n) => onChange({ ...value, every: n })} />
+            <span className="text-xs text-stone-600">{value.every === 1 ? 'week, on' : 'weeks, on'}</span>
+          </div>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {WEEKDAYS.map((d, i) => (
+              <Pill key={d} on={value.weekday === i} onClick={() => onChange({ ...value, weekday: i })}>
+                {d.slice(0, 3)}
+              </Pill>
+            ))}
+          </div>
+        </>
+      )}
+
+      {value.kind === 'months' && (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-stone-600">Every</span>
+          <Num value={value.every} min={1} max={24} onChange={(n) => onChange({ ...value, every: n })} />
+          <span className="text-xs text-stone-600">
+            {value.every === 1 ? 'month, on day' : 'months, on day'}
+          </span>
+          <Num value={value.day} min={1} max={28} onChange={(n) => onChange({ ...value, day: n })} />
+        </div>
+      )}
+
+      {value.kind === 'twiceMonthly' && (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-xs text-stone-600">On the</span>
+          <Num
+            value={value.days[0]}
+            min={1}
+            max={28}
+            onChange={(n) => onChange({ ...value, days: [n, value.days[1]] })}
+          />
+          <span className="text-xs text-stone-600">and the</span>
+          <Num
+            value={value.days[1]}
+            min={1}
+            max={28}
+            onChange={(n) => onChange({ ...value, days: [value.days[0], n] })}
+          />
+        </div>
+      )}
+
+      {value.kind === 'weekdayOfMonth' && (
+        <>
+          <div className="mb-1.5 flex flex-wrap gap-1.5">
+            {NTH_LABEL.map((label, i) => (
+              <Pill key={label} on={value.nth === i + 1} onClick={() => onChange({ ...value, nth: i + 1 })}>
+                {label}
+              </Pill>
+            ))}
+          </div>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {WEEKDAYS.map((d, i) => (
+              <Pill key={d} on={value.weekday === i} onClick={() => onChange({ ...value, weekday: i })}>
+                {d.slice(0, 3)}
+              </Pill>
+            ))}
+          </div>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-stone-600">Every</span>
+            <Num value={value.every} min={1} max={24} onChange={(n) => onChange({ ...value, every: n })} />
+            <span className="text-xs text-stone-600">{value.every === 1 ? 'month' : 'months'}</span>
+          </div>
+        </>
+      )}
+
+      {value.kind !== 'daily' && (
+        <div className="mb-2 rounded-xl bg-stone-50 px-3 py-2">
+          <p className="text-xs text-stone-600">
+            {preview.length ? (
+              <>Next: <span className="font-medium text-stone-900">
+                {preview.map((d) => longDay(d).replace(/,.*?(\w+ \d+)$/, ', $1')).join(' · ')}
+              </span></>
+            ) : (
+              'That rule never comes round. Check the numbers.'
+            )}
+          </p>
+          {spaced && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] text-stone-500">Wrong one?</span>
+              <button
+                type="button"
+                onClick={() => onChange(shiftPhase(value, 1))}
+                className="rounded-lg border border-stone-300 bg-white px-2 py-0.5 text-[11px] text-stone-700 hover:border-stone-400"
+              >
+                {value.kind === 'weeks' ? 'Shift a week' : 'Shift a month'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {(value.kind === 'months' || value.kind === 'twiceMonthly') && (
+        <p className="mb-2 text-xs text-stone-500">
+          Days run 1 to 28, capped so a routine never silently skips February.
+        </p>
+      )}
+    </>
+  );
+}
+
 /** One editor for both adding and changing. Delete lives here, not on the row. */
 function RoutineEditor({
   existing, roles, onClose, nextOrder,
 }: { existing: Routine | null; roles: Role[]; onClose: () => void; nextOrder: number }) {
   const [f, setF] = useState({
     title: existing?.title ?? '',
-    cadence: (existing?.cadence ?? 'weekly') as Cadence,
-    anchor: existing?.anchor ?? 1,
     roleId: existing?.roleId ?? '',
     link: existing?.link ?? '',
     minutes: existing?.minutes ? String(existing.minutes) : '',
   });
+  const [rep, setRep] = useState<Repeat>(
+    existing ? repeatOf(existing) : { kind: 'weeks', every: 1, weekday: 1, from: todayIso() },
+  );
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -591,12 +763,25 @@ function RoutineEditor({
       setError('That link needs to be a web address starting with https://');
       return;
     }
+    if (rep.kind === 'twiceMonthly' && rep.days[0] === rep.days[1]) {
+      setError('Twice a month needs two different days.');
+      return;
+    }
+    if (nextDates(rep, todayIso(), 1).length === 0) {
+      setError('That repeat never comes round. Check the numbers.');
+      return;
+    }
     try {
       await saveRoutine({
         id: existing?.id ?? newId(),
         title: f.title.trim(),
-        cadence: f.cadence,
-        anchor: f.cadence === 'daily' ? null : f.anchor,
+        repeat: rep,
+        // Set once, on creation. Editing a routine must not rewrite its history.
+        startOn: existing?.startOn ?? todayIso(),
+        // The old pair is still written so a routine stays readable if this ever
+        // has to be rolled back. They are ignored whenever `repeat` is present.
+        cadence: legacyCadence(rep),
+        anchor: legacyAnchor(rep),
         roleId: f.roleId || null,
         link: safeLinkOf(f.link),
         lastDoneOn: existing?.lastDoneOn ?? null,
@@ -628,64 +813,7 @@ function RoutineEditor({
           className="mb-2 w-full rounded-xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm"
         />
 
-        <p className="mb-1 text-xs font-medium text-stone-500">How often</p>
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          {CADENCES.map((c) => (
-            <button
-              key={c}
-              onClick={() => setF({ ...f, cadence: c })}
-              className={`rounded-full px-3 py-1 text-xs ${
-                f.cadence === c
-                  ? 'bg-stone-900 font-semibold text-white'
-                  : 'border border-stone-300 bg-white text-stone-600'
-              }`}
-            >
-              {CADENCE_LABEL[c]}
-            </button>
-          ))}
-        </div>
-
-        {f.cadence === 'weekly' && (
-          <>
-            <p className="mb-1 text-xs font-medium text-stone-500">Which day</p>
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {WEEKDAYS.map((d, i) => (
-                <button
-                  key={d}
-                  onClick={() => setF({ ...f, anchor: i })}
-                  className={`rounded-full px-3 py-1 text-xs ${
-                    f.anchor === i
-                      ? 'bg-stone-900 font-semibold text-white'
-                      : 'border border-stone-300 bg-white text-stone-600'
-                  }`}
-                >
-                  {d.slice(0, 3)}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-
-        {(f.cadence === 'monthly' || f.cadence === 'quarterly') && (
-          <>
-            <p className="mb-1 text-xs font-medium text-stone-500">
-              Which day of the month{f.cadence === 'quarterly' && ' (January, April, July, October)'}
-            </p>
-            <input
-              type="number"
-              min={1}
-              max={28}
-              value={f.anchor}
-              onChange={(e) =>
-                setF({ ...f, anchor: Math.min(28, Math.max(1, Number(e.target.value) || 1)) })
-              }
-              className="mb-1 w-24 rounded-xl border border-stone-300 bg-stone-50 px-3 py-2 text-sm"
-            />
-            <p className="mb-2 text-xs text-stone-500">
-              1 to 28. Capped so it never silently skips February.
-            </p>
-          </>
-        )}
+        <RepeatPicker value={rep} onChange={setRep} />
 
         <p className="mb-1 text-xs font-medium text-stone-500">Roughly how long (minutes)</p>
         <input
