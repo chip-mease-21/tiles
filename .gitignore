@@ -9,3 +9,4 @@ dist-ssr
 firebase-debug.log
 serviceAccount.json
 firestore-debug.log
+*.patch
