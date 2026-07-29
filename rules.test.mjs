@@ -475,6 +475,19 @@ await t('Chip reads his own roles', () => assertSucceeds(getDoc(doc(chip, 'users
 await t('Chip reads his own tiles', () => assertSucceeds(getDoc(doc(chip, 'entries/e_chip'))));
 await t("even the admin is BLOCKED from Gabe's private roles", () => assertFails(getDoc(doc(chip, 'users/gabe/roles/r1'))));
 
+// Routines and their findings live in the private space and are covered by the
+// recursive rule above rather than one of their own. These exist so that if
+// anybody ever narrows that rule, the failure is loud instead of a quiet leak
+// of what somebody has and has not been keeping up with.
+await t('you write your own routines', () => assertSucceeds(
+  setDoc(doc(chip, 'users/chip/routines/r_cash'), { title: 'Cash position', cadence: 'daily' })));
+await t('you write your own findings', () => assertSucceeds(
+  setDoc(doc(chip, 'users/chip/findings/f1'), { routineId: 'r_cash', outcome: 'attention', note: 'Two charges to chase' })));
+await t("an editor is BLOCKED from somebody else's routines", () => assertFails(
+  getDoc(doc(matt, 'users/chip/routines/r_cash'))));
+await t("the admin is BLOCKED from somebody else's findings", () => assertFails(
+  getDocs(collection(chip, 'users/gabe/findings'))));
+
 // Tiles stores tag categories at userdata/{uid}. These four exist because
 // dropping this collection from the ruleset breaks tag filing silently.
 await t('a person reads their own tag categories', () => assertSucceeds(

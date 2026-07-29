@@ -13,8 +13,9 @@ import { MemberAdmin } from '../admin/MemberAdmin';
 import { MyWork } from '../me/MyWork';
 import { TeamCards } from '../me/TeamCards';
 import { HeartAndTreasure } from '../ht/HeartAndTreasure';
+import { Rhythm } from '../rhythm/Rhythm';
 
-type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members' | 'ht';
+type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members' | 'ht' | 'rhythm';
 
 export function AppShell({ tiles }: { tiles: React.ReactNode }) {
   const { canSeeBoard, isAdmin, loading, user, space } = useOrg();
@@ -34,6 +35,7 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: 'tiles', label: 'My tiles' },
     { id: 'me', label: 'My roles' },
+    { id: 'rhythm', label: 'Rhythm' },
     { id: 'dlt', label: 'DLT board' },
     { id: 'team', label: 'Team' },
     ...(space ? [{ id: 'ht' as Tab, label: 'Heart & Treasure' }] : []),
@@ -63,6 +65,7 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
       {tab === 'me' && <MyWork />}
       {tab === 'dlt' && <DltWorkspace />}
       {tab === 'team' && <TeamCards />}
+      {tab === 'rhythm' && <Rhythm />}
       {tab === 'ht' && <HeartAndTreasure />}
       {tab === 'members' && <MemberAdmin />}
       {user && <span className="sr-only">Signed in as {user.uid}</span>}
