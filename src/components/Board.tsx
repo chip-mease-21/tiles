@@ -14,6 +14,7 @@ import { arrayMove } from '@dnd-kit/sortable'
 import { COLUMNS, type ColumnId, type Entry, type SortMode } from '../types'
 import { sortEntries } from '../lib/sort'
 import { updateEntry } from '../lib/useEntries'
+import { useEntryScope } from '../lib/entryScope'
 import Column from './Column'
 import Tile from './Tile'
 import type { TagCategories } from '../lib/useUserData'
@@ -37,6 +38,7 @@ export default function Board({
   onQuickAdd: (c: ColumnId) => void
   onTagClick: (tag: string) => void
 }) {
+  const scope = useEntryScope()
   const [activeId, setActiveId] = useState<string | null>(null)
 
   const sensors = useSensors(
@@ -76,7 +78,7 @@ export default function Board({
     else if (after) newPos = after.position - 1
     else newPos = Date.now()
 
-    updateEntry(moving.id, { position: newPos })
+    updateEntry(scope, moving.id, { position: newPos })
   }
 
   return (

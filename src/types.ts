@@ -49,6 +49,12 @@ export interface Entry {
   dueDate?: string | null // ISO yyyy-mm-dd
   pinned: boolean
   archived?: boolean
+  /**
+   * Who the tile belongs to on a shared board. Null means nobody has picked it
+   * up yet, which is deliberately visible rather than defaulted away. Ignored
+   * entirely on a private board, where every tile is yours by definition.
+   */
+  ownerUid?: string | null
   tasks: Task[]
   createdAt?: number
   updatedAt?: number

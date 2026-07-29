@@ -10,13 +10,13 @@ import {
 } from '../lib/useUserData'
 
 export default function TagManager({
-  userId,
+  tagPath,
   tagCategories,
   categories,
   usage,
   onClose
 }: {
-  userId: string
+  tagPath: string
   tagCategories: TagCategories
   categories: string[]
   usage: Record<string, number>
@@ -38,21 +38,21 @@ export default function TagManager({
   function addTagToCat() {
     const t = newTag.toLowerCase().replace(/^#/, '').trim()
     if (!t) return
-    setTagCategory(userId, t, newCat)
+    setTagCategory(tagPath, t, newCat)
     setNewTag('')
   }
 
   function addNewCategory() {
     const n = newCategory.trim()
     if (!n) return
-    addCategory(userId, n, categories)
+    addCategory(tagPath, n, categories)
     setNewCategory('')
   }
 
   function deleteCategory(cat: string) {
     // Move its tags to Unsorted, then remove the category.
-    for (const tag of groups[cat] ?? []) setTagCategory(userId, tag, 'Unsorted')
-    removeCategory(userId, cat, categories)
+    for (const tag of groups[cat] ?? []) setTagCategory(tagPath, tag, 'Unsorted')
+    removeCategory(tagPath, cat, categories)
   }
 
   return (
@@ -156,7 +156,7 @@ export default function TagManager({
                         <span className="text-[11px] text-muted">{usage[tag] || 0} used</span>
                         <select
                           value={cat}
-                          onChange={(e) => setTagCategory(userId, tag, e.target.value)}
+                          onChange={(e) => setTagCategory(tagPath, tag, e.target.value)}
                           className="ml-auto rounded-md border border-edge bg-ink px-1.5 py-1 text-xs text-text"
                         >
                           {order.map((c2) => (
@@ -166,7 +166,7 @@ export default function TagManager({
                           ))}
                         </select>
                         <button
-                          onClick={() => deleteTag(userId, tag)}
+                          onClick={() => deleteTag(tagPath, tag)}
                           className="px-1 text-muted hover:text-red-500"
                           aria-label="Delete tag"
                         >

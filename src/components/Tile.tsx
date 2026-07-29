@@ -2,6 +2,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { Entry } from '../types'
 import { updateEntry } from '../lib/useEntries'
+import { useEntryScope } from '../lib/entryScope'
 import { tagColor } from '../lib/colors'
 import type { TagCategories } from '../lib/useUserData'
 
@@ -39,6 +40,7 @@ export default function Tile({
   onOpen: (id: string) => void
   onTagClick?: (tag: string) => void
 }) {
+  const scope = useEntryScope()
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: entry.id })
 
@@ -51,12 +53,15 @@ export default function Tile({
   const isTodo = entry.type === 'todo'
   const done = entry.tasks.filter((t) => t.done).length
   const total = entry.tasks.length
+  const owner = scope.shared
+    ? scope.people.find((p) => p.uid === entry.ownerUid)?.name ?? 'Unassigned'
+    : null
   const due = dueLabel(entry.dueDate)
   const created = createdLabel(entry.createdAt)
   const accent = entry.tags.length ? tagColor(entry.tags[0], cats).solid : '#cbd5e1'
 
   function toggleTask(id: string) {
-    updateEntry(entry.id, {
+    updateEntry(scope, entry.id, {
       tasks: entry.tasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
     })
   }
@@ -81,6 +86,19 @@ export default function Tile({
         <h3 className="flex-1 break-words text-[15px] font-semibold leading-snug text-text">
           {entry.title || <span className="italic text-muted">Untitled</span>}
         </h3>
+        {owner && (
+          <span
+            className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+              entry.ownerUid === scope.me
+                ? 'bg-accent/15 text-accent'
+                : entry.ownerUid
+                  ? 'bg-column text-muted'
+                  : 'bg-column text-muted italic'
+            }`}
+          >
+            {owner}
+          </span>
+        )}
         {isTodo && total > 0 && (
           <span className="shrink-0 rounded-full bg-column px-2 py-0.5 text-[11px] font-medium text-muted">
             {done}/{total}

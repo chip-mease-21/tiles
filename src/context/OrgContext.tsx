@@ -13,6 +13,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState 
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { claimSeat, watchMember, watchSettings } from '../lib/org';
+import { claimSpaceSeat, watchMySpaceSeat, type SpaceMember } from '../ht/space';
 import {
   canEditEverything, canSeeBoard, type Member, type OrgSettings, type Role,
 } from '../types/dlt';
@@ -30,12 +31,14 @@ interface OrgState {
   canEdit: boolean;
   /** May manage membership. */
   isAdmin: boolean;
+  /** Seat in the Heart and Treasure space. Unrelated to any org role. */
+  space: SpaceMember | null;
   loading: boolean;
 }
 
 const empty: OrgState = {
   user: null, member: null, settings: null, role: null,
-  isMember: false, canSeeBoard: false, canEdit: false, isAdmin: false, loading: true,
+  isMember: false, canSeeBoard: false, canEdit: false, isAdmin: false, space: null, loading: true,
 };
 
 const Ctx = createContext<OrgState>(empty);
@@ -44,14 +47,29 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [member, setMember] = useState<Member | null>(null);
   const [settings, setSettings] = useState<OrgSettings | null>(null);
+  const [space, setSpace] = useState<SpaceMember | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [memberReady, setMemberReady] = useState(false);
 
   useEffect(() => onAuthStateChanged(auth, (u) => {
     setUser(u);
     setAuthReady(true);
-    if (!u) { setMember(null); setMemberReady(true); }
+    if (!u) { setMember(null); setSpace(null); setMemberReady(true); }
   }), []);
+
+  // A space seat is independent of everything above it. Somebody can be in
+  // Heart and Treasure with no seat on the DLT board, and the other way round.
+  useEffect(() => {
+    if (!user) return;
+    return watchMySpaceSeat(user.uid, setSpace);
+  }, [user]);
+
+  const spaceClaimTried = useRef<string | null>(null);
+  useEffect(() => {
+    if (!user || space || spaceClaimTried.current === user.uid) return;
+    spaceClaimTried.current = user.uid;
+    void claimSpaceSeat(user.uid, user.email).catch(() => {});
+  }, [user, space]);
 
   useEffect(() => {
     if (!user) return;
@@ -90,8 +108,9 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
     canSeeBoard: canSeeBoard(role),
     canEdit: canEditEverything(role),
     isAdmin: role === 'admin',
+    space: space?.active ? space : null,
     loading: !authReady || (!!user && !memberReady),
-  }), [user, member, settings, role, active, authReady, memberReady]);
+  }), [user, member, settings, role, active, authReady, memberReady, space]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

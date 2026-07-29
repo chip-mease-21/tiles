@@ -1,0 +1,1326 @@
+diff --git a/HEART-AND-TREASURE.md b/HEART-AND-TREASURE.md
+new file mode 100644
+index 0000000..7b10cde
+--- /dev/null
++++ b/HEART-AND-TREASURE.md
+@@ -0,0 +1,69 @@
++# Heart and Treasure
++
++A shared workspace that is not the DLT board and not anybody's private tiles.
++
++## What it is
++
++The same board you already use — same columns, same tiles, same drag and drop,
++same tag system — pointed at a different collection. Every card carries an
++owner, so either of you can hand work to the other, and a filter switches
++between Mine, Theirs and Everything.
++
++Tags are shared, so `book`, `workbook`, `marketing` and `website` mean the same
++thing on both screens.
++
++## Who can see it
++
++Only people with a seat in the space. That is a completely separate list from
++the DLT board. Matt, Gabe and Rachel cannot read a word of it, and neither can
++anybody else at the church — not because the tab is hidden from them, but
++because no rule grants them anything under `spaces/ht`. There is no admin
++override in that section on purpose.
++
++The reverse is also true and also tested: a Heart and Treasure seat reaches
++nothing on the DLT board and nothing in anyone's private roles card.
++
++## Setting it up, once
++
++The first seat goes in by hand for the same reason the org's did: a bootstrap
++path is an escalation path.
++
++In the Firebase console, create two documents.
++
++```
++spaces/ht
++  name: "Heart and Treasure"
++
++spaces/ht/members/9LqrNafqIrhVFs3jlRHnoHRINwm2
++  name:   "Chip Measells"
++  email:  "chip@thepointcville.com"
++  active: true          <- boolean, not the text "true"
++```
++
++That is all. Everything after this happens in the app.
++
++## Adding Karen
++
++Open the Heart & Treasure tab, click **Who is in here**, and add her name and
++the email address on her Google account. She does not need to do anything
++first and she never has to send you an id.
++
++When she signs in, the app matches her verified email to the invite and seats
++her. Because she has no seat on the DLT board, she lands straight on Heart and
++Treasure with no other navigation — no church tabs, no personal tiles board,
++nothing to explain.
++
++If she signs in and lands on an empty screen instead, the address on her Google
++account differs from the one you invited. The screen tells her which address
++she is actually signed in with.
++
++## Once you are both in
++
++Either of you can assign a card to the other. New cards start **unassigned** on
++purpose rather than defaulting to whoever typed them, so unclaimed work reads as
++unclaimed rather than quietly landing on someone. Unassigned cards show up under
++**Theirs**, which is the filter to check when you want to know what is falling
++between you.
++
++Removing somebody is mutual — you can each deactivate the other but not
++yourself, so neither of you can lock the space down alone.
+diff --git a/firestore.rules b/firestore.rules
+index 272db90..aa08d43 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -402,6 +402,85 @@ service cloud.firestore {
+       }
+     }
+ 
++    // ----------------------------------------------------------------- SPACES
++    //
++    // A space is a shared workspace that belongs to no org and to nobody's
++    // private account. Heart and Treasure is one.
++    //
++    // Membership of the space is the only thing that grants access to it. A seat
++    // on the DLT board grants nothing here. Being admin of the org grants
++    // nothing here. There is no override anywhere in this section, which is the
++    // point: the people at the church cannot reach this work, and the people in
++    // this space cannot reach the church's.
++    function spaceSeat(spaceId) {
++      return /databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid);
++    }
++    function inSpace(spaceId) {
++      return signedIn()
++        && exists(spaceSeat(spaceId))
++        && get(spaceSeat(spaceId)).data.get('active', false) == true;
++    }
++    function spaceInvite(spaceId) {
++      return /databases/$(database)/documents/spaces/$(spaceId)/invites/$(myEmail());
++    }
++
++    match /spaces/{spaceId} {
++      allow read: if inSpace(spaceId);
++
++      match /members/{uid} {
++        // Reading your own seat has to work when you have no seat, because the
++        // app reads it to decide whether the tab exists at all.
++        allow read: if inSpace(spaceId) || (signedIn() && uid == request.auth.uid);
++
++        // The only way in: claim the seat left for your verified address.
++        allow create: if signedIn()
++          && uid == request.auth.uid
++          && myEmail() != ''
++          && emailVerified()
++          && exists(spaceInvite(spaceId))
++          && request.resource.data.get('email', '') == myEmail()
++          && request.resource.data.get('name', '') == get(spaceInvite(spaceId)).data.get('name', '')
++          && request.resource.data.get('active', false) == true
++          && request.resource.data.keys().hasOnly(['name', 'email', 'active', 'claimedAt'])
++          && request.resource.data.get('claimedAt', null) == request.time;
++
++        // A two person workspace has no hierarchy, so members can remove and
++        // restore each other, but not themselves. Removing yourself would leave
++        // the space with one fewer way back in and no console to fix it from.
++        allow update: if inSpace(spaceId)
++          && uid != request.auth.uid
++          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']);
++        allow delete: if inSpace(spaceId) && uid != request.auth.uid;
++      }
++
++      match /invites/{email} {
++        allow read: if inSpace(spaceId) || (signedIn() && email == myEmail());
++        allow create, update: if inSpace(spaceId)
++          && request.resource.data.get('email', '') == email
++          && request.resource.data.keys().hasOnly(['name', 'email', 'invitedAt']);
++        allow delete: if inSpace(spaceId);
++      }
++
++      // The shared tiles. Everyone in the space sees all of them and may change
++      // any of them, including handing one to the other person.
++      //
++      // Two different fields again: userId is who created it and is pinned, so
++      // a tile cannot be quietly reattributed. ownerUid is who it is assigned to
++      // and is meant to change, in either direction.
++      match /entries/{entryId} {
++        allow read, delete: if inSpace(spaceId);
++        allow create: if inSpace(spaceId)
++          && request.resource.data.get('userId', '') == request.auth.uid;
++        allow update: if inSpace(spaceId)
++          && request.resource.data.get('userId', '') == resource.data.get('userId', '');
++      }
++
++      // One shared tag vocabulary, so a tag means the same thing on both screens.
++      match /meta/{docId} {
++        allow read, write: if inSpace(spaceId);
++      }
++    }
++
+     // Everything not matched above is denied by default. Do not add a collection
+     // group rule of the form  match /{path=**}/members/{uid}  to make collection
+     // group queries work. That pattern crosses the org boundary.
+diff --git a/rules.test.mjs b/rules.test.mjs
+index c87878b..84affe7 100644
+--- a/rules.test.mjs
++++ b/rules.test.mjs
+@@ -83,6 +83,16 @@ await env.withSecurityRulesDisabled(async (ctx) => {
+   await setDoc(doc(db, `orgs/${ORG}/shares/rachel__chip`), { ownerUid: 'rachel', ownerName: 'Rachel', withUid: 'chip' });
+   await setDoc(doc(db, `orgs/${ORG}/shares/gabe__sam`), { ownerUid: 'gabe', ownerName: 'Gabe', withUid: 'sam' });
+ 
++  // Heart and Treasure: a shared space with no relationship to the org at all.
++  await setDoc(doc(db, 'spaces/ht'), { name: 'Heart and Treasure' });
++  await setDoc(doc(db, 'spaces/ht/members/chip'), {
++    name: 'Chip', email: 'chip@thepointcville.com', active: true });
++  await setDoc(doc(db, 'spaces/ht/invites/karen@example.com'), {
++    name: 'Karen', email: 'karen@example.com' });
++  await setDoc(doc(db, 'spaces/ht/entries/e_book'), {
++    userId: 'chip', title: 'Book outline', column: 'this_week', ownerUid: null });
++  await setDoc(doc(db, 'spaces/ht/meta/tags'), { categories: ['Book', 'Marketing'] });
++
+   // Invites: a seat assigned to an email before that person has ever signed in.
+   await setDoc(doc(db, `orgs/${ORG}/invites/newbie@thepointcville.com`), {
+     name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt', campusId: null });
+@@ -110,6 +120,15 @@ const unverified = env.authenticatedContext('u_unver', tok('newbie@thepointcvill
+ const wouldbeboss = env.authenticatedContext('u_boss', tok('boss@thepointcville.com')).firestore();
+ const walkin    = env.authenticatedContext('u_walkin', tok('random@gmail.com')).firestore();
+ 
++const karen = env.authenticatedContext('u_karen', tok('karen@example.com')).firestore();
++const spaceSeat = (extra = {}) => ({
++  name: 'Karen', email: 'karen@example.com', active: true,
++  claimedAt: serverTimestamp(), ...extra,
++});
++const tile = (extra = {}) => ({
++  userId: 'chip', title: 'x', column: 'inbox', ownerUid: null, ...extra,
++});
++
+ const seat = (extra = {}) => ({
+   name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt',
+   active: true, campusId: null, claimedAt: serverTimestamp(), ...extra,
+@@ -377,6 +396,64 @@ await t('a claimed seat cannot be re-created to undo a deactivation', () => asse
+ await t('and the newly seated person cannot promote themselves', () => assertFails(
+   updateDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), { role: 'admin' })));
+ 
++console.log('\nA SPACE IS SEALED OFF FROM THE ORG IN BOTH DIRECTIONS');
++await t('a space member reads the shared tiles', () => assertSucceeds(
++  getDocs(collection(chip, 'spaces/ht/entries'))));
++await t('a DLT editor is BLOCKED from the shared tiles', () => assertFails(
++  getDocs(collection(matt, 'spaces/ht/entries'))));
++await t('a DLT editor is BLOCKED from a single shared tile', () => assertFails(
++  getDoc(doc(gabe, 'spaces/ht/entries/e_book'))));
++await t('a DLT editor is BLOCKED from the space document', () => assertFails(
++  getDoc(doc(rachel, 'spaces/ht'))));
++await t('a DLT editor is BLOCKED from the shared tag list', () => assertFails(
++  getDoc(doc(matt, 'spaces/ht/meta/tags'))));
++await t('a non member is BLOCKED from the space roster', () => assertFails(
++  getDocs(collection(sam, 'spaces/ht/members'))));
++await t('a non member cannot write a shared tile', () => assertFails(
++  setDoc(doc(matt, 'spaces/ht/entries/e_sneak'), tile({ userId: 'matt' }))));
++
++console.log('\nINSIDE THE SPACE, BOTH PEOPLE ARE EQUAL');
++await t('you can read your own space seat when you have none', () => assertSucceeds(
++  getDoc(doc(karen, 'spaces/ht/members/u_karen'))));
++await t('an uninvited person cannot seat themselves in the space', () => assertFails(
++  setDoc(doc(walkin, 'spaces/ht/members/u_walkin'), spaceSeat({ email: 'random@gmail.com', name: 'Walk In' }))));
++await t('you cannot claim a space seat at a uid that is not yours', () => assertFails(
++  setDoc(doc(karen, 'spaces/ht/members/somebody'), spaceSeat())));
++await t('the claim must carry the invited name', () => assertFails(
++  setDoc(doc(karen, 'spaces/ht/members/u_karen'), spaceSeat({ name: 'Not Karen' }))));
++await t('the invited person claims their space seat', () => assertSucceeds(
++  setDoc(doc(karen, 'spaces/ht/members/u_karen'), spaceSeat())));
++await t('and can now read the shared tiles', () => assertSucceeds(
++  getDocs(collection(karen, 'spaces/ht/entries'))));
++await t('but a space seat reaches nothing on the DLT board', () => assertFails(
++  getDocs(collection(karen, `orgs/${ORG}/rocks`))));
++await t('and nothing in anybody\'s private roles', () => assertFails(
++  getDoc(doc(karen, 'users/chip/roles/r_finance'))));
++await t('and can assign a tile to the other person', () => assertSucceeds(
++  updateDoc(doc(karen, 'spaces/ht/entries/e_book'), { ownerUid: 'chip' })));
++await t('but cannot rewrite who created it', () => assertFails(
++  updateDoc(doc(karen, 'spaces/ht/entries/e_book'), { userId: 'u_karen' })));
++await t('a tile must be created under your own name', () => assertFails(
++  setDoc(doc(karen, 'spaces/ht/entries/e_forged'), tile({ userId: 'chip' }))));
++await t('a member creates a tile', () => assertSucceeds(
++  setDoc(doc(karen, 'spaces/ht/entries/e_mine'), tile({ userId: 'u_karen' }))));
++await t('a member deletes a tile', () => assertSucceeds(
++  deleteDoc(doc(karen, 'spaces/ht/entries/e_mine'))));
++await t('a member edits the shared tag list', () => assertSucceeds(
++  setDoc(doc(karen, 'spaces/ht/meta/tags'), { categories: ['Book', 'Workbook'] }, { merge: true })));
++await t('a member invites somebody else', () => assertSucceeds(
++  setDoc(doc(karen, 'spaces/ht/invites/editor@example.com'),
++    { name: 'Editor', email: 'editor@example.com' })));
++await t('a non member cannot invite themselves in', () => assertFails(
++  setDoc(doc(matt, 'spaces/ht/invites/matt@thepointcville.com'),
++    { name: 'Matt', email: 'matt@thepointcville.com' })));
++await t('a member cannot remove themselves', () => assertFails(
++  updateDoc(doc(karen, 'spaces/ht/members/u_karen'), { active: false })));
++await t('a member can remove the other person', () => assertSucceeds(
++  updateDoc(doc(karen, 'spaces/ht/members/chip'), { active: false })));
++await t('and removal cannot smuggle in a rename', () => assertFails(
++  updateDoc(doc(karen, 'spaces/ht/members/chip'), { active: true, name: 'Hijacked' })));
++
+ console.log('\nEVERY PERSON KEEPS A PRIVATE ACCOUNT');
+ await t("editor is BLOCKED from Chip's Roles cards", () => assertFails(getDoc(doc(matt, 'users/chip/roles/r_finance'))));
+ await t("editor is BLOCKED from Chip's weekly reviews", () => assertFails(getDoc(doc(gabe, 'users/chip/reviews/w1'))));
+diff --git a/src/TilesApp.tsx b/src/TilesApp.tsx
+index 8740771..fbf3393 100644
+--- a/src/TilesApp.tsx
++++ b/src/TilesApp.tsx
+@@ -12,6 +12,7 @@ import QuickAdd from './components/QuickAdd'
+ import TagBar from './components/TagBar'
+ import TagManager from './components/TagManager'
+ import Login from './components/Login'
++import { EntryScopeProvider, personalScope, type EntryScope } from './lib/entryScope'
+ 
+ const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
+   inbox: 'manual',
+@@ -35,11 +36,30 @@ function useIsDesktop() {
+   return d
+ }
+ 
+-export default function TilesApp() {
++/**
++ * One board, two scopes.
++ *
++ * With no props this is Tiles exactly as it has always been: your own entries,
++ * your own tags, nobody else's anything. Pass a scope and the same board points
++ * at a shared space instead, which is how Heart and Treasure reuses every tile,
++ * every column and the whole drag and drop rather than forking them.
++ */
++export default function TilesApp({
++  scope: scopeProp,
++  title = 'Tiles'
++}: {
++  scope?: EntryScope
++  title?: string
++} = {}) {
+   const { user, loading } = useAuth()
+-  const { entries } = useEntries(user?.uid)
+-  const { tagCategories, categories, loaded: tagsLoaded } = useUserData(user?.uid)
++  const scope = useMemo<EntryScope | null>(
++    () => scopeProp ?? (user ? personalScope(user.uid) : null),
++    [scopeProp, user]
++  )
++  const { entries } = useEntries(scope)
++  const { tagCategories, categories, loaded: tagsLoaded } = useUserData(scope?.tagPath)
+   const isDesktop = useIsDesktop()
++  const [owned, setOwned] = useState<'all' | 'mine' | 'theirs'>('all')
+ 
+   const [openId, setOpenId] = useState<string | null>(null)
+   const [quickAdd, setQuickAdd] = useState(false)
+@@ -66,8 +86,8 @@ export default function TilesApp() {
+     if (!user || !tagsLoaded) return
+     const used = new Set<string>()
+     for (const e of entries) for (const t of e.tags) used.add(t)
+-    registerTags(user.uid, [...used], tagCategories)
+-  }, [entries, tagCategories, tagsLoaded, user])
++    if (scope) void registerTags(scope.tagPath, [...used], tagCategories)
++  }, [entries, tagCategories, tagsLoaded, user, scope])
+ 
+   const knownTags = useMemo(() => Object.keys(tagCategories).sort(), [tagCategories])
+ 
+@@ -76,9 +96,11 @@ export default function TilesApp() {
+       entries.filter(
+         (e) =>
+           matchesFilter(e, selectedTags, search) &&
+-          (showArchived ? e.archived === true : !e.archived)
++          (showArchived ? e.archived === true : !e.archived) &&
++          (owned === 'all' ||
++            (owned === 'mine' ? e.ownerUid === scope?.me : e.ownerUid !== scope?.me))
+       ),
+-    [entries, selectedTags, search, showArchived]
++    [entries, selectedTags, search, showArchived, owned, scope]
+   )
+   const counts = useMemo(() => {
+     // Derived from COLUMNS so adding or retiring a column is a one line change.
+@@ -93,16 +115,16 @@ export default function TilesApp() {
+       <div className="flex min-h-screen items-center justify-center text-muted">…</div>
+     )
+   }
+-  if (!user) return <Login />
++  if (!user || !scope) return <Login />
+ 
+   async function quickCreate(text: string) {
+     const { title, tags, dueDate } = parseCapture(text)
+     setActiveColumn('inbox')
+-    return createEntry(user!.uid, { title, tags, dueDate, type: 'note', column: 'inbox' })
++    return createEntry(scope!, { title, tags, dueDate, type: 'note', column: 'inbox' })
+   }
+ 
+   async function addToColumn(column: ColumnId) {
+-    const id = await createEntry(user!.uid, { type: 'note', column })
++    const id = await createEntry(scope!, { type: 'note', column })
+     setOpenId(id)
+   }
+ 
+@@ -115,10 +137,11 @@ export default function TilesApp() {
+   }
+ 
+   return (
++    <EntryScopeProvider value={scope}>
+     <div className="min-h-screen pb-24">
+       <header className="flex items-center justify-between px-4 pt-3">
+         <h1 className="text-xl font-bold tracking-tight">
+-          {showArchived ? 'Archived' : 'Tiles'}
++          {showArchived ? 'Archived' : title}
+         </h1>
+         <div className="flex items-center gap-3 text-xs text-muted">
+           <button
+@@ -133,6 +156,27 @@ export default function TilesApp() {
+         </div>
+       </header>
+ 
++      {scope.shared && (
++        <div className="flex items-center gap-1.5 px-4 pt-2">
++          {(['all', 'mine', 'theirs'] as const).map((k) => (
++            <button
++              key={k}
++              onClick={() => setOwned(k)}
++              className={`rounded-full px-3 py-1 text-xs ${
++                owned === k
++                  ? 'bg-accent font-semibold text-white'
++                  : 'bg-panel text-muted hover:text-text'
++              }`}
++            >
++              {k === 'all' ? 'Everything' : k === 'mine' ? 'Mine' : 'Theirs'}
++            </button>
++          ))}
++          <span className="ml-1 text-xs text-muted">
++            Unassigned work shows under Theirs, because nobody has picked it up.
++          </span>
++        </div>
++      )}
++
+       <TagBar
+         tagCategories={tagCategories}
+         categories={categories}
+@@ -233,7 +277,7 @@ export default function TilesApp() {
+ 
+       {showTags && (
+         <TagManager
+-          userId={user.uid}
++          tagPath={scope.tagPath}
+           tagCategories={tagCategories}
+           categories={categories}
+           usage={usage}
+@@ -249,5 +293,6 @@ export default function TilesApp() {
+         </div>
+       )}
+     </div>
++    </EntryScopeProvider>
+   )
+ }
+diff --git a/src/components/Board.tsx b/src/components/Board.tsx
+index 6cdd73c..d57d19c 100644
+--- a/src/components/Board.tsx
++++ b/src/components/Board.tsx
+@@ -14,6 +14,7 @@ import { arrayMove } from '@dnd-kit/sortable'
+ import { COLUMNS, type ColumnId, type Entry, type SortMode } from '../types'
+ import { sortEntries } from '../lib/sort'
+ import { updateEntry } from '../lib/useEntries'
++import { useEntryScope } from '../lib/entryScope'
+ import Column from './Column'
+ import Tile from './Tile'
+ import type { TagCategories } from '../lib/useUserData'
+@@ -37,6 +38,7 @@ export default function Board({
+   onQuickAdd: (c: ColumnId) => void
+   onTagClick: (tag: string) => void
+ }) {
++  const scope = useEntryScope()
+   const [activeId, setActiveId] = useState<string | null>(null)
+ 
+   const sensors = useSensors(
+@@ -76,7 +78,7 @@ export default function Board({
+     else if (after) newPos = after.position - 1
+     else newPos = Date.now()
+ 
+-    updateEntry(moving.id, { position: newPos })
++    updateEntry(scope, moving.id, { position: newPos })
+   }
+ 
+   return (
+diff --git a/src/components/BoardColumns.tsx b/src/components/BoardColumns.tsx
+index 7d74452..2b078d7 100644
+--- a/src/components/BoardColumns.tsx
++++ b/src/components/BoardColumns.tsx
+@@ -14,6 +14,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
+ import { COLUMNS, type ColumnId, type Entry, type SortMode } from '../types'
+ import { sortEntries } from '../lib/sort'
+ import { updateEntry } from '../lib/useEntries'
++import { useEntryScope } from '../lib/entryScope'
+ import Tile from './Tile'
+ import type { TagCategories } from '../lib/useUserData'
+ 
+@@ -104,6 +105,7 @@ export default function BoardColumns({
+   onQuickAdd: (c: ColumnId) => void
+   onTagClick: (tag: string) => void
+ }) {
++  const scope = useEntryScope()
+   const [activeId, setActiveId] = useState<string | null>(null)
+   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+ 
+@@ -150,7 +152,7 @@ export default function BoardColumns({
+ 
+     const changedColumn = destColumn !== moving.column
+     if (!changedColumn && Math.abs(newPos - moving.position) < 1e-9) return
+-    updateEntry(moving.id, { column: destColumn, position: newPos })
++    updateEntry(scope, moving.id, { column: destColumn, position: newPos })
+   }
+ 
+   return (
+diff --git a/src/components/TagManager.tsx b/src/components/TagManager.tsx
+index 0ec664a..5785a04 100644
+--- a/src/components/TagManager.tsx
++++ b/src/components/TagManager.tsx
+@@ -10,13 +10,13 @@ import {
+ } from '../lib/useUserData'
+ 
+ export default function TagManager({
+-  userId,
++  tagPath,
+   tagCategories,
+   categories,
+   usage,
+   onClose
+ }: {
+-  userId: string
++  tagPath: string
+   tagCategories: TagCategories
+   categories: string[]
+   usage: Record<string, number>
+@@ -38,21 +38,21 @@ export default function TagManager({
+   function addTagToCat() {
+     const t = newTag.toLowerCase().replace(/^#/, '').trim()
+     if (!t) return
+-    setTagCategory(userId, t, newCat)
++    setTagCategory(tagPath, t, newCat)
+     setNewTag('')
+   }
+ 
+   function addNewCategory() {
+     const n = newCategory.trim()
+     if (!n) return
+-    addCategory(userId, n, categories)
++    addCategory(tagPath, n, categories)
+     setNewCategory('')
+   }
+ 
+   function deleteCategory(cat: string) {
+     // Move its tags to Unsorted, then remove the category.
+-    for (const tag of groups[cat] ?? []) setTagCategory(userId, tag, 'Unsorted')
+-    removeCategory(userId, cat, categories)
++    for (const tag of groups[cat] ?? []) setTagCategory(tagPath, tag, 'Unsorted')
++    removeCategory(tagPath, cat, categories)
+   }
+ 
+   return (
+@@ -156,7 +156,7 @@ export default function TagManager({
+                         <span className="text-[11px] text-muted">{usage[tag] || 0} used</span>
+                         <select
+                           value={cat}
+-                          onChange={(e) => setTagCategory(userId, tag, e.target.value)}
++                          onChange={(e) => setTagCategory(tagPath, tag, e.target.value)}
+                           className="ml-auto rounded-md border border-edge bg-ink px-1.5 py-1 text-xs text-text"
+                         >
+                           {order.map((c2) => (
+@@ -166,7 +166,7 @@ export default function TagManager({
+                           ))}
+                         </select>
+                         <button
+-                          onClick={() => deleteTag(userId, tag)}
++                          onClick={() => deleteTag(tagPath, tag)}
+                           className="px-1 text-muted hover:text-red-500"
+                           aria-label="Delete tag"
+                         >
+diff --git a/src/components/Tile.tsx b/src/components/Tile.tsx
+index 0870058..d4cc358 100644
+--- a/src/components/Tile.tsx
++++ b/src/components/Tile.tsx
+@@ -2,6 +2,7 @@ import { useSortable } from '@dnd-kit/sortable'
+ import { CSS } from '@dnd-kit/utilities'
+ import type { Entry } from '../types'
+ import { updateEntry } from '../lib/useEntries'
++import { useEntryScope } from '../lib/entryScope'
+ import { tagColor } from '../lib/colors'
+ import type { TagCategories } from '../lib/useUserData'
+ 
+@@ -39,6 +40,7 @@ export default function Tile({
+   onOpen: (id: string) => void
+   onTagClick?: (tag: string) => void
+ }) {
++  const scope = useEntryScope()
+   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+     useSortable({ id: entry.id })
+ 
+@@ -51,12 +53,15 @@ export default function Tile({
+   const isTodo = entry.type === 'todo'
+   const done = entry.tasks.filter((t) => t.done).length
+   const total = entry.tasks.length
++  const owner = scope.shared
++    ? scope.people.find((p) => p.uid === entry.ownerUid)?.name ?? 'Unassigned'
++    : null
+   const due = dueLabel(entry.dueDate)
+   const created = createdLabel(entry.createdAt)
+   const accent = entry.tags.length ? tagColor(entry.tags[0], cats).solid : '#cbd5e1'
+ 
+   function toggleTask(id: string) {
+-    updateEntry(entry.id, {
++    updateEntry(scope, entry.id, {
+       tasks: entry.tasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t))
+     })
+   }
+@@ -81,6 +86,19 @@ export default function Tile({
+         <h3 className="flex-1 break-words text-[15px] font-semibold leading-snug text-text">
+           {entry.title || <span className="italic text-muted">Untitled</span>}
+         </h3>
++        {owner && (
++          <span
++            className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${
++              entry.ownerUid === scope.me
++                ? 'bg-accent/15 text-accent'
++                : entry.ownerUid
++                  ? 'bg-column text-muted'
++                  : 'bg-column text-muted italic'
++            }`}
++          >
++            {owner}
++          </span>
++        )}
+         {isTodo && total > 0 && (
+           <span className="shrink-0 rounded-full bg-column px-2 py-0.5 text-[11px] font-medium text-muted">
+             {done}/{total}
+diff --git a/src/components/TileEditor.tsx b/src/components/TileEditor.tsx
+index cb2d07d..7557273 100644
+--- a/src/components/TileEditor.tsx
++++ b/src/components/TileEditor.tsx
+@@ -5,6 +5,7 @@ import { COLUMNS, type ColumnId, type Entry, type EntryType } from '../types'
+ import { sortTags } from '../lib/sort'
+ import { tagColor } from '../lib/colors'
+ import { updateEntry, deleteEntry } from '../lib/useEntries'
++import { useEntryScope } from '../lib/entryScope'
+ import type { TagCategories } from '../lib/useUserData'
+ 
+ export default function TileEditor({
+@@ -18,6 +19,7 @@ export default function TileEditor({
+   cats: TagCategories
+   onClose: () => void
+ }) {
++  const scope = useEntryScope()
+   const [local, setLocal] = useState<Entry>(entry)
+   const [tagInput, setTagInput] = useState('')
+ 
+@@ -31,7 +33,7 @@ export default function TileEditor({
+     const t = setTimeout(() => {
+       const { id, ...patch } = local
+       void id
+-      updateEntry(entry.id, patch)
++      updateEntry(scope, entry.id, patch)
+     }, 400)
+     return () => clearTimeout(t)
+   }, [local]) // eslint-disable-line react-hooks/exhaustive-deps
+@@ -62,14 +64,14 @@ export default function TileEditor({
+   function closeAndSave() {
+     const { id, ...patch } = local
+     void id
+-    updateEntry(entry.id, patch)
++    updateEntry(scope, entry.id, patch)
+     onClose()
+   }
+ 
+   function archiveAndClose(value: boolean) {
+     const { id, ...patch } = local
+     void id
+-    updateEntry(entry.id, { ...patch, archived: value })
++    updateEntry(scope, entry.id, { ...patch, archived: value })
+     onClose()
+   }
+ 
+@@ -160,6 +162,31 @@ export default function TileEditor({
+           )}
+         </div>
+ 
++        {/* who owns it, shared boards only */}
++        {scope.shared && (
++          <div className="mb-3">
++            <label className="mb-1 block text-xs font-medium text-muted">Owner</label>
++            <div className="flex flex-wrap gap-1.5">
++              {[{ uid: '', name: 'Unassigned' }, ...scope.people].map((p) => {
++                const on = (local.ownerUid ?? '') === p.uid
++                return (
++                  <button
++                    key={p.uid || 'none'}
++                    onClick={() => set('ownerUid', p.uid || null)}
++                    className={`rounded-full px-3 py-1 text-xs ${
++                      on
++                        ? 'bg-accent font-semibold text-white'
++                        : 'border border-edge bg-panel text-muted hover:text-text'
++                    }`}
++                  >
++                    {p.name}
++                  </button>
++                )
++              })}
++            </div>
++          </div>
++        )}
++
+         {/* move to column */}
+         <div className="mb-3">
+           <label className="mb-1 block text-xs font-medium text-muted">Column</label>
+@@ -224,7 +251,7 @@ export default function TileEditor({
+             </button>
+             <button
+               onClick={() => {
+-                deleteEntry(entry.id)
++                deleteEntry(scope, entry.id)
+                 onClose()
+               }}
+               className="text-xs text-red-400/90 hover:text-red-500"
+diff --git a/src/context/OrgContext.tsx b/src/context/OrgContext.tsx
+index 321d06b..1cbcde5 100644
+--- a/src/context/OrgContext.tsx
++++ b/src/context/OrgContext.tsx
+@@ -13,6 +13,7 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState
+ import { onAuthStateChanged, type User } from 'firebase/auth';
+ import { auth } from '../lib/firebase';
+ import { claimSeat, watchMember, watchSettings } from '../lib/org';
++import { claimSpaceSeat, watchMySpaceSeat, type SpaceMember } from '../ht/space';
+ import {
+   canEditEverything, canSeeBoard, type Member, type OrgSettings, type Role,
+ } from '../types/dlt';
+@@ -30,12 +31,14 @@ interface OrgState {
+   canEdit: boolean;
+   /** May manage membership. */
+   isAdmin: boolean;
++  /** Seat in the Heart and Treasure space. Unrelated to any org role. */
++  space: SpaceMember | null;
+   loading: boolean;
+ }
+ 
+ const empty: OrgState = {
+   user: null, member: null, settings: null, role: null,
+-  isMember: false, canSeeBoard: false, canEdit: false, isAdmin: false, loading: true,
++  isMember: false, canSeeBoard: false, canEdit: false, isAdmin: false, space: null, loading: true,
+ };
+ 
+ const Ctx = createContext<OrgState>(empty);
+@@ -44,15 +47,30 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
+   const [user, setUser] = useState<User | null>(null);
+   const [member, setMember] = useState<Member | null>(null);
+   const [settings, setSettings] = useState<OrgSettings | null>(null);
++  const [space, setSpace] = useState<SpaceMember | null>(null);
+   const [authReady, setAuthReady] = useState(false);
+   const [memberReady, setMemberReady] = useState(false);
+ 
+   useEffect(() => onAuthStateChanged(auth, (u) => {
+     setUser(u);
+     setAuthReady(true);
+-    if (!u) { setMember(null); setMemberReady(true); }
++    if (!u) { setMember(null); setSpace(null); setMemberReady(true); }
+   }), []);
+ 
++  // A space seat is independent of everything above it. Somebody can be in
++  // Heart and Treasure with no seat on the DLT board, and the other way round.
++  useEffect(() => {
++    if (!user) return;
++    return watchMySpaceSeat(user.uid, setSpace);
++  }, [user]);
++
++  const spaceClaimTried = useRef<string | null>(null);
++  useEffect(() => {
++    if (!user || space || spaceClaimTried.current === user.uid) return;
++    spaceClaimTried.current = user.uid;
++    void claimSpaceSeat(user.uid, user.email).catch(() => {});
++  }, [user, space]);
++
+   useEffect(() => {
+     if (!user) return;
+     setMemberReady(false);
+@@ -90,8 +108,9 @@ export function OrgProvider({ children }: { children: React.ReactNode }) {
+     canSeeBoard: canSeeBoard(role),
+     canEdit: canEditEverything(role),
+     isAdmin: role === 'admin',
++    space: space?.active ? space : null,
+     loading: !authReady || (!!user && !memberReady),
+-  }), [user, member, settings, role, active, authReady, memberReady]);
++  }), [user, member, settings, role, active, authReady, memberReady, space]);
+ 
+   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+ }
+diff --git a/src/dlt/AppShell.tsx b/src/dlt/AppShell.tsx
+index 6507cdc..681f31b 100644
+--- a/src/dlt/AppShell.tsx
++++ b/src/dlt/AppShell.tsx
+@@ -12,19 +12,23 @@ import { DltWorkspace } from './DltWorkspace';
+ import { MemberAdmin } from '../admin/MemberAdmin';
+ import { MyWork } from '../me/MyWork';
+ import { TeamCards } from '../me/TeamCards';
++import { HeartAndTreasure } from '../ht/HeartAndTreasure';
+ 
+-type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members';
++type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members' | 'ht';
+ 
+ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
+-  const { canSeeBoard, isAdmin, loading, user } = useOrg();
++  const { canSeeBoard, isAdmin, loading, user, space } = useOrg();
+   const [tab, setTab] = useState<Tab>('tiles');
+ 
+   if (loading) {
+     return <div className="p-8 text-center text-sm text-stone-500">Loading</div>;
+   }
+ 
+-  // Nobody seated on the shared board sees any of this. The app is exactly what
+-  // it was before.
++  // Somebody who is only in Heart and Treasure gets that and nothing else. No
++  // church navigation, no personal board, nothing to explain.
++  if (!canSeeBoard && space) return <HeartAndTreasure />;
++
++  // Nobody seated on either gets exactly the app they had before.
+   if (!canSeeBoard) return <>{tiles}</>;
+ 
+   const tabs: { id: Tab; label: string }[] = [
+@@ -32,6 +36,7 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
+     { id: 'me', label: 'My roles' },
+     { id: 'dlt', label: 'DLT board' },
+     { id: 'team', label: 'Team' },
++    ...(space ? [{ id: 'ht' as Tab, label: 'Heart & Treasure' }] : []),
+     ...(isAdmin ? [{ id: 'members' as Tab, label: 'Members' }] : []),
+   ];
+ 
+@@ -58,6 +63,7 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
+       {tab === 'me' && <MyWork />}
+       {tab === 'dlt' && <DltWorkspace />}
+       {tab === 'team' && <TeamCards />}
++      {tab === 'ht' && <HeartAndTreasure />}
+       {tab === 'members' && <MemberAdmin />}
+       {user && <span className="sr-only">Signed in as {user.uid}</span>}
+     </>
+diff --git a/src/ht/HeartAndTreasure.tsx b/src/ht/HeartAndTreasure.tsx
+new file mode 100644
+index 0000000..9e242ec
+--- /dev/null
++++ b/src/ht/HeartAndTreasure.tsx
+@@ -0,0 +1,147 @@
++/**
++ * The Heart and Treasure tab.
++ *
++ * Deliberately thin. It works out who is in the space, hands that to the same
++ * board component your personal tiles use, and adds the one screen that has no
++ * personal equivalent: who else is in here.
++ */
++import { useEffect, useMemo, useState } from 'react';
++import TilesApp from '../TilesApp';
++import { useOrg } from '../context/OrgContext';
++import {
++  HT_NAME, deleteSpaceInvite, htScope, saveSpaceInvite, setSpaceMemberActive,
++  watchSpaceInvites, watchSpaceMembers, type SpaceInvite, type SpaceMember,
++} from './space';
++
++export function HeartAndTreasure() {
++  const { user } = useOrg();
++  const [members, setMembers] = useState<SpaceMember[]>([]);
++  const [showPeople, setShowPeople] = useState(false);
++
++  useEffect(() => watchSpaceMembers(setMembers), []);
++
++  const people = useMemo(
++    () => members.filter((m) => m.active).map((m) => ({ uid: m.uid, name: m.name })),
++    [members],
++  );
++  const scope = useMemo(
++    () => (user ? htScope(user.uid, people) : null),
++    [user, people],
++  );
++
++  if (!scope) return null;
++
++  return (
++    <>
++      <div className="flex items-center justify-end gap-3 px-4 pt-2 text-xs text-muted">
++        <span>
++          Shared with {people.filter((p) => p.uid !== user?.uid).map((p) => p.name).join(', ') || 'nobody yet'}
++        </span>
++        <button className="underline hover:text-text" onClick={() => setShowPeople(true)}>
++          Who is in here
++        </button>
++      </div>
++      <TilesApp scope={scope} title={HT_NAME} />
++      {showPeople && <PeoplePanel members={members} onClose={() => setShowPeople(false)} />}
++    </>
++  );
++}
++
++function PeoplePanel({ members, onClose }: { members: SpaceMember[]; onClose: () => void }) {
++  const [invites, setInvites] = useState<SpaceInvite[]>([]);
++  const [draft, setDraft] = useState({ name: '', email: '' });
++  const [error, setError] = useState('');
++
++  useEffect(() => watchSpaceInvites(setInvites), []);
++
++  async function invite() {
++    setError('');
++    const email = draft.email.trim().toLowerCase();
++    if (!draft.name.trim() || !email.includes('@')) {
++      setError('A name and a real email address are both required.');
++      return;
++    }
++    try {
++      await saveSpaceInvite({ name: draft.name.trim(), email });
++      setDraft({ name: '', email: '' });
++    } catch (e) {
++      setError(e instanceof Error ? e.message : String(e));
++    }
++  }
++
++  const seated = new Set(members.map((m) => m.email?.toLowerCase()));
++
++  return (
++    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-6">
++      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-t-2xl bg-panel p-4 sm:rounded-2xl">
++        <div className="mb-3 flex items-center justify-between">
++          <h2 className="text-base font-semibold text-text">Who is in Heart and Treasure</h2>
++          <button className="text-sm text-muted hover:text-text" onClick={onClose}>Close</button>
++        </div>
++
++        <ul className="mb-4 divide-y divide-edge">
++          {members.map((m) => (
++            <li key={m.uid} className="flex items-center gap-3 py-2">
++              <div className="flex-1">
++                <p className="text-sm font-medium text-text">{m.name}</p>
++                <p className="text-xs text-muted">{m.email}</p>
++              </div>
++              <button
++                className="text-xs text-muted underline hover:text-text"
++                onClick={() => void setSpaceMemberActive(m.uid, !m.active)}
++              >
++                {m.active ? 'Remove' : 'Restore'}
++              </button>
++            </li>
++          ))}
++        </ul>
++
++        {invites.filter((i) => !seated.has(i.email)).length > 0 && (
++          <>
++            <p className="mb-1 text-xs font-medium text-muted">Invited, not signed in yet</p>
++            <ul className="mb-4 divide-y divide-edge">
++              {invites.filter((i) => !seated.has(i.email)).map((i) => (
++                <li key={i.email} className="flex items-center gap-3 py-2">
++                  <div className="flex-1">
++                    <p className="text-sm text-text">{i.name}</p>
++                    <p className="text-xs text-muted">{i.email}</p>
++                  </div>
++                  <button
++                    className="text-xs text-muted underline hover:text-text"
++                    onClick={() => void deleteSpaceInvite(i.email)}
++                  >
++                    Cancel
++                  </button>
++                </li>
++              ))}
++            </ul>
++          </>
++        )}
++
++        <p className="mb-2 text-xs text-muted">
++          Add the address on their Google account. The board is waiting for them the first time they sign in,
++          and they see nothing else in here.
++        </p>
++        <input
++          value={draft.name}
++          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
++          placeholder="Name"
++          className="mb-2 w-full rounded-lg border border-edge bg-column px-3 py-2 text-sm text-text"
++        />
++        <input
++          value={draft.email}
++          onChange={(e) => setDraft({ ...draft, email: e.target.value })}
++          placeholder="name@example.com"
++          className="mb-2 w-full rounded-lg border border-edge bg-column px-3 py-2 text-sm text-text"
++        />
++        {error && <p className="mb-2 text-xs font-medium text-red-400">{error}</p>}
++        <button
++          onClick={invite}
++          className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white"
++        >
++          Invite
++        </button>
++      </div>
++    </div>
++  );
++}
+diff --git a/src/ht/space.ts b/src/ht/space.ts
+new file mode 100644
+index 0000000..d27063f
+--- /dev/null
++++ b/src/ht/space.ts
+@@ -0,0 +1,101 @@
++/**
++ * Heart and Treasure: a shared workspace that is not the DLT board and not
++ * anybody's private tiles.
++ *
++ * A space is its own tree. Membership of a space is the only thing that grants
++ * access to it, and it is unrelated to a seat on the DLT board or to being
++ * admin of the org. Nobody at the church can reach this because nothing about
++ * their membership says anything about this collection.
++ *
++ * Like org seats, a person is invited by email address and the seat is claimed
++ * automatically the first time they sign in, so nobody has to send a uid.
++ */
++import {
++  collection, deleteDoc, doc, getDoc, onSnapshot, orderBy, query,
++  serverTimestamp, setDoc, type Unsubscribe,
++} from 'firebase/firestore'
++import { db } from '../lib/firebase'
++import type { EntryScope, ScopePerson } from '../lib/entryScope'
++
++export const HT_SPACE = 'ht';
++export const HT_NAME = 'Heart and Treasure';
++
++export interface SpaceMember {
++  uid: string;
++  name: string;
++  email: string;
++  active: boolean;
++}
++
++export interface SpaceInvite {
++  email: string;
++  name: string;
++}
++
++const p = {
++  space: `spaces/${HT_SPACE}`,
++  members: `spaces/${HT_SPACE}/members`,
++  member: (uid: string) => `spaces/${HT_SPACE}/members/${uid}`,
++  invites: `spaces/${HT_SPACE}/invites`,
++  invite: (email: string) => `spaces/${HT_SPACE}/invites/${email.trim().toLowerCase()}`,
++  entries: `spaces/${HT_SPACE}/entries`,
++  tags: `spaces/${HT_SPACE}/meta/tags`,
++};
++
++export const spacePaths = p;
++
++/** Your own seat, or null. Drives whether the tab appears at all. */
++export function watchMySpaceSeat(uid: string, cb: (m: SpaceMember | null) => void): Unsubscribe {
++  return onSnapshot(doc(db, p.member(uid)), (snap) =>
++    cb(snap.exists() ? ({ uid, ...snap.data() } as SpaceMember) : null),
++    () => cb(null));
++}
++
++export function watchSpaceMembers(cb: (m: SpaceMember[]) => void): Unsubscribe {
++  return onSnapshot(query(collection(db, p.members), orderBy('name')), (snap) =>
++    cb(snap.docs.map((d) => ({ uid: d.id, ...d.data() } as SpaceMember))),
++    () => cb([]));
++}
++
++export function watchSpaceInvites(cb: (i: SpaceInvite[]) => void): Unsubscribe {
++  return onSnapshot(query(collection(db, p.invites), orderBy('name')), (snap) =>
++    cb(snap.docs.map((d) => ({ ...d.data(), email: d.id } as SpaceInvite))),
++    () => cb([]));
++}
++
++export const saveSpaceInvite = (i: SpaceInvite) =>
++  setDoc(doc(db, p.invite(i.email)), {
++    name: i.name.trim(),
++    email: i.email.trim().toLowerCase(),
++    invitedAt: serverTimestamp(),
++  });
++
++export const deleteSpaceInvite = (email: string) => deleteDoc(doc(db, p.invite(email)));
++
++export const setSpaceMemberActive = (uid: string, active: boolean) =>
++  setDoc(doc(db, p.member(uid)), { active }, { merge: true });
++
++/**
++ * Claim the seat waiting for this email address, if there is one. Returns false
++ * for everyone else, which is nearly everyone, so this stays quiet.
++ */
++export async function claimSpaceSeat(uid: string, email: string | null | undefined): Promise<boolean> {
++  const e = email?.trim().toLowerCase();
++  if (!e) return false;
++  const snap = await getDoc(doc(db, p.invite(e)));
++  if (!snap.exists()) return false;
++  const inv = snap.data() as SpaceInvite;
++  await setDoc(doc(db, p.member(uid)), {
++    name: inv.name, email: e, active: true, claimedAt: serverTimestamp(),
++  });
++  return true;
++}
++
++/** The scope the shared board runs under. */
++export const htScope = (uid: string, people: ScopePerson[]): EntryScope => ({
++  path: p.entries,
++  tagPath: p.tags,
++  shared: true,
++  people,
++  me: uid,
++});
+diff --git a/src/lib/entryScope.tsx b/src/lib/entryScope.tsx
+new file mode 100644
+index 0000000..2ab7c61
+--- /dev/null
++++ b/src/lib/entryScope.tsx
+@@ -0,0 +1,55 @@
++/**
++ * Which set of tiles a board is looking at.
++ *
++ * Tiles was single player: every entry lived in one collection and belonged to
++ * exactly one uid. Heart and Treasure is shared, so the same board components
++ * now need to point at a different collection with a different ownership rule.
++ * Rather than fork the board, the collection became a parameter.
++ *
++ * Your personal board is the default and behaves exactly as it always has:
++ * collection `entries`, filtered to your uid, no assignment. Nothing about the
++ * shared case reaches it, and no rule grants anyone else access to it.
++ */
++import { createContext, useContext, type ReactNode } from 'react'
++
++export interface ScopePerson {
++  uid: string
++  name: string
++}
++
++export interface EntryScope {
++  /** Firestore collection holding the tiles. */
++  path: string
++  /** Document holding the tag categories for this board. */
++  tagPath: string
++  /** Set on a private board: only this person's tiles are read. Absent on a shared one. */
++  ownerFilterUid?: string
++  /** True when tiles carry an assignee and everyone in the space sees them all. */
++  shared: boolean
++  /** Who a tile can be assigned to. Empty on a private board. */
++  people: ScopePerson[]
++  /** The signed in person, used for stamping and for the Mine filter. */
++  me: string
++}
++
++const Ctx = createContext<EntryScope | null>(null)
++
++export function EntryScopeProvider({ value, children }: { value: EntryScope; children: ReactNode }) {
++  return <Ctx.Provider value={value}>{children}</Ctx.Provider>
++}
++
++export function useEntryScope(): EntryScope {
++  const s = useContext(Ctx)
++  if (!s) throw new Error('useEntryScope must be used inside an EntryScopeProvider')
++  return s
++}
++
++/** Your own private tiles. The shape Tiles has always had. */
++export const personalScope = (uid: string): EntryScope => ({
++  path: 'entries',
++  tagPath: `userdata/${uid}`,
++  ownerFilterUid: uid,
++  shared: false,
++  people: [],
++  me: uid
++})
+diff --git a/src/lib/useEntries.ts b/src/lib/useEntries.ts
+index 88e0ceb..653a412 100644
+--- a/src/lib/useEntries.ts
++++ b/src/lib/useEntries.ts
+@@ -8,21 +8,32 @@ import {
+   updateDoc,
+   deleteDoc,
+   doc,
+-  serverTimestamp
++  serverTimestamp,
++  type QueryConstraint
+ } from 'firebase/firestore'
+ import { db } from './firebase'
+ import { toColumn, type ColumnId, type Entry, type EntryType } from '../types'
++import type { EntryScope } from './entryScope'
+ 
+-const COL = 'entries'
+-
+-// Subscribe to the current user's entries in realtime.
+-export function useEntries(userId: string | undefined) {
++// Subscribe to the tiles this board is scoped to, in realtime.
++//
++// A private board carries ownerFilterUid and reads only that person's tiles;
++// the security rules reject an unfiltered read of `entries`, so this filter is
++// load bearing, not a convenience. A shared space has no such filter because
++// membership of the space is what grants access.
++export function useEntries(scope: EntryScope | null) {
+   const [entries, setEntries] = useState<Entry[]>([])
+   const [loaded, setLoaded] = useState(false)
+ 
++  const path = scope?.path
++  const owner = scope?.ownerFilterUid
++
+   useEffect(() => {
+-    if (!userId) return
+-    const q = query(collection(db, COL), where('userId', '==', userId))
++    if (!path) return
++    // A private board with no uid yet is not ready; a shared board never has one.
++    if (owner === undefined && scope?.shared !== true) return
++    const constraints: QueryConstraint[] = owner ? [where('userId', '==', owner)] : []
++    const q = query(collection(db, path), ...constraints)
+     const unsub = onSnapshot(q, (snap) => {
+       const rows: Entry[] = snap.docs.map((d) => {
+         const data = d.data() as Omit<Entry, 'id'>
+@@ -38,18 +49,18 @@ export function useEntries(userId: string | undefined) {
+       setLoaded(true)
+     })
+     return unsub
+-  }, [userId])
++  }, [path, owner, scope?.shared])
+ 
+   return { entries, loaded }
+ }
+ 
+ export async function createEntry(
+-  userId: string,
++  scope: EntryScope,
+   partial: Partial<Entry> & { type?: EntryType; column?: ColumnId }
+ ) {
+   const now = Date.now()
+   const payload = {
+-    userId,
++    userId: scope.me,
+     type: partial.type ?? 'note',
+     title: partial.title ?? '',
+     body: partial.body ?? '',
+@@ -60,19 +71,23 @@ export async function createEntry(
+     pinned: partial.pinned ?? false,
+     archived: partial.archived ?? false,
+     tasks: partial.tasks ?? [],
++    // On a shared board a new tile starts unassigned on purpose. Work with no
++    // owner is visible as work with no owner rather than quietly landing on
++    // whoever typed it.
++    ownerUid: partial.ownerUid ?? null,
+     createdAt: now, // client time so the "created" date shows immediately
+     updatedAt: serverTimestamp()
+   }
+-  const ref = await addDoc(collection(db, COL), payload)
++  const ref = await addDoc(collection(db, scope.path), payload)
+   return ref.id
+ }
+ 
+-export async function updateEntry(id: string, patch: Partial<Entry>) {
++export async function updateEntry(scope: EntryScope, id: string, patch: Partial<Entry>) {
+   const { id: _omit, ...rest } = patch as Entry
+   void _omit
+-  await updateDoc(doc(db, COL, id), { ...rest, updatedAt: serverTimestamp() })
++  await updateDoc(doc(db, scope.path, id), { ...rest, updatedAt: serverTimestamp() })
+ }
+ 
+-export async function deleteEntry(id: string) {
+-  await deleteDoc(doc(db, COL, id))
++export async function deleteEntry(scope: EntryScope, id: string) {
++  await deleteDoc(doc(db, scope.path, id))
+ }
+diff --git a/src/lib/useUserData.ts b/src/lib/useUserData.ts
+index 19870e3..1bb8c70 100644
+--- a/src/lib/useUserData.ts
++++ b/src/lib/useUserData.ts
+@@ -5,18 +5,19 @@ import { DEFAULT_CATEGORIES, type TagCategory } from '../types'
+ 
+ export type TagCategories = Record<string, TagCategory>
+ 
+-// Per-user document at userdata/{uid}:
+-//   tagCategories: which category each tag belongs to (keys = the user's tags)
+-//   categories: the ordered list of category names the user has defined
+-export function useUserData(userId: string | undefined) {
++// Tag categories live in one document. For your private board that is
++// userdata/{uid}; for a shared space it is a document inside the space, so both
++// people file against the same vocabulary instead of inventing their own.
++//   tagCategories: which category each tag belongs to (keys = the tags)
++//   categories: the ordered list of category names
++export function useUserData(docPath: string | undefined) {
+   const [tagCategories, setTagCategories] = useState<TagCategories>({})
+   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES)
+   const [loaded, setLoaded] = useState(false)
+ 
+   useEffect(() => {
+-    if (!userId) return
+-    const ref = doc(db, 'userdata', userId)
+-    const unsub = onSnapshot(ref, (snap) => {
++    if (!docPath) return
++    const unsub = onSnapshot(doc(db, docPath), (snap) => {
+       const data = snap.data() as
+         | { tagCategories?: TagCategories; categories?: string[] }
+         | undefined
+@@ -27,22 +28,18 @@ export function useUserData(userId: string | undefined) {
+       setLoaded(true)
+     })
+     return unsub
+-  }, [userId])
++  }, [docPath])
+ 
+   return { tagCategories, categories, loaded }
+ }
+ 
+-export async function setTagCategory(userId: string, tag: string, category: TagCategory) {
+-  await setDoc(
+-    doc(db, 'userdata', userId),
+-    { tagCategories: { [tag]: category } },
+-    { merge: true }
+-  )
++export async function setTagCategory(docPath: string, tag: string, category: TagCategory) {
++  await setDoc(doc(db, docPath), { tagCategories: { [tag]: category } }, { merge: true })
+ }
+ 
+ // Register tags (default to Unsorted) without overwriting existing categories.
+ export async function registerTags(
+-  userId: string,
++  docPath: string,
+   tags: string[],
+   existing: TagCategories
+ ) {
+@@ -50,27 +47,19 @@ export async function registerTags(
+   if (missing.length === 0) return
+   const patch: TagCategories = {}
+   for (const t of missing) patch[t] = 'Unsorted'
+-  await setDoc(doc(db, 'userdata', userId), { tagCategories: patch }, { merge: true })
++  await setDoc(doc(db, docPath), { tagCategories: patch }, { merge: true })
+ }
+ 
+-export async function deleteTag(userId: string, tag: string) {
+-  await setDoc(
+-    doc(db, 'userdata', userId),
+-    { tagCategories: { [tag]: deleteField() } },
+-    { merge: true }
+-  )
++export async function deleteTag(docPath: string, tag: string) {
++  await setDoc(doc(db, docPath), { tagCategories: { [tag]: deleteField() } }, { merge: true })
+ }
+ 
+-export async function addCategory(userId: string, name: string, current: string[]) {
++export async function addCategory(docPath: string, name: string, current: string[]) {
+   const n = name.trim()
+   if (!n || current.includes(n)) return
+-  await setDoc(doc(db, 'userdata', userId), { categories: [...current, n] }, { merge: true })
++  await setDoc(doc(db, docPath), { categories: [...current, n] }, { merge: true })
+ }
+ 
+-export async function removeCategory(userId: string, name: string, current: string[]) {
+-  await setDoc(
+-    doc(db, 'userdata', userId),
+-    { categories: current.filter((c) => c !== name) },
+-    { merge: true }
+-  )
++export async function removeCategory(docPath: string, name: string, current: string[]) {
++  await setDoc(doc(db, docPath), { categories: current.filter((c) => c !== name) }, { merge: true })
+ }
+diff --git a/src/types.ts b/src/types.ts
+index 9d4d5fd..c7f4253 100644
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -49,6 +49,12 @@ export interface Entry {
+   dueDate?: string | null // ISO yyyy-mm-dd
+   pinned: boolean
+   archived?: boolean
++  /**
++   * Who the tile belongs to on a shared board. Null means nobody has picked it
++   * up yet, which is deliberately visible rather than defaulted away. Ignored
++   * entirely on a private board, where every tile is yours by definition.
++   */
++  ownerUid?: string | null
+   tasks: Task[]
+   createdAt?: number
+   updatedAt?: number

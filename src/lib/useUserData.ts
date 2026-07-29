@@ -5,18 +5,19 @@ import { DEFAULT_CATEGORIES, type TagCategory } from '../types'
 
 export type TagCategories = Record<string, TagCategory>
 
-// Per-user document at userdata/{uid}:
-//   tagCategories: which category each tag belongs to (keys = the user's tags)
-//   categories: the ordered list of category names the user has defined
-export function useUserData(userId: string | undefined) {
+// Tag categories live in one document. For your private board that is
+// userdata/{uid}; for a shared space it is a document inside the space, so both
+// people file against the same vocabulary instead of inventing their own.
+//   tagCategories: which category each tag belongs to (keys = the tags)
+//   categories: the ordered list of category names
+export function useUserData(docPath: string | undefined) {
   const [tagCategories, setTagCategories] = useState<TagCategories>({})
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
-    if (!userId) return
-    const ref = doc(db, 'userdata', userId)
-    const unsub = onSnapshot(ref, (snap) => {
+    if (!docPath) return
+    const unsub = onSnapshot(doc(db, docPath), (snap) => {
       const data = snap.data() as
         | { tagCategories?: TagCategories; categories?: string[] }
         | undefined
@@ -27,22 +28,18 @@ export function useUserData(userId: string | undefined) {
       setLoaded(true)
     })
     return unsub
-  }, [userId])
+  }, [docPath])
 
   return { tagCategories, categories, loaded }
 }
 
-export async function setTagCategory(userId: string, tag: string, category: TagCategory) {
-  await setDoc(
-    doc(db, 'userdata', userId),
-    { tagCategories: { [tag]: category } },
-    { merge: true }
-  )
+export async function setTagCategory(docPath: string, tag: string, category: TagCategory) {
+  await setDoc(doc(db, docPath), { tagCategories: { [tag]: category } }, { merge: true })
 }
 
 // Register tags (default to Unsorted) without overwriting existing categories.
 export async function registerTags(
-  userId: string,
+  docPath: string,
   tags: string[],
   existing: TagCategories
 ) {
@@ -50,27 +47,19 @@ export async function registerTags(
   if (missing.length === 0) return
   const patch: TagCategories = {}
   for (const t of missing) patch[t] = 'Unsorted'
-  await setDoc(doc(db, 'userdata', userId), { tagCategories: patch }, { merge: true })
+  await setDoc(doc(db, docPath), { tagCategories: patch }, { merge: true })
 }
 
-export async function deleteTag(userId: string, tag: string) {
-  await setDoc(
-    doc(db, 'userdata', userId),
-    { tagCategories: { [tag]: deleteField() } },
-    { merge: true }
-  )
+export async function deleteTag(docPath: string, tag: string) {
+  await setDoc(doc(db, docPath), { tagCategories: { [tag]: deleteField() } }, { merge: true })
 }
 
-export async function addCategory(userId: string, name: string, current: string[]) {
+export async function addCategory(docPath: string, name: string, current: string[]) {
   const n = name.trim()
   if (!n || current.includes(n)) return
-  await setDoc(doc(db, 'userdata', userId), { categories: [...current, n] }, { merge: true })
+  await setDoc(doc(db, docPath), { categories: [...current, n] }, { merge: true })
 }
 
-export async function removeCategory(userId: string, name: string, current: string[]) {
-  await setDoc(
-    doc(db, 'userdata', userId),
-    { categories: current.filter((c) => c !== name) },
-    { merge: true }
-  )
+export async function removeCategory(docPath: string, name: string, current: string[]) {
+  await setDoc(doc(db, docPath), { categories: current.filter((c) => c !== name) }, { merge: true })
 }

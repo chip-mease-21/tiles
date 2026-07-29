@@ -14,6 +14,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { COLUMNS, type ColumnId, type Entry, type SortMode } from '../types'
 import { sortEntries } from '../lib/sort'
 import { updateEntry } from '../lib/useEntries'
+import { useEntryScope } from '../lib/entryScope'
 import Tile from './Tile'
 import type { TagCategories } from '../lib/useUserData'
 
@@ -104,6 +105,7 @@ export default function BoardColumns({
   onQuickAdd: (c: ColumnId) => void
   onTagClick: (tag: string) => void
 }) {
+  const scope = useEntryScope()
   const [activeId, setActiveId] = useState<string | null>(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
@@ -150,7 +152,7 @@ export default function BoardColumns({
 
     const changedColumn = destColumn !== moving.column
     if (!changedColumn && Math.abs(newPos - moving.position) < 1e-9) return
-    updateEntry(moving.id, { column: destColumn, position: newPos })
+    updateEntry(scope, moving.id, { column: destColumn, position: newPos })
   }
 
   return (

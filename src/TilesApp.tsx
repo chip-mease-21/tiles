@@ -12,6 +12,7 @@ import QuickAdd from './components/QuickAdd'
 import TagBar from './components/TagBar'
 import TagManager from './components/TagManager'
 import Login from './components/Login'
+import { EntryScopeProvider, personalScope, type EntryScope } from './lib/entryScope'
 
 const DEFAULT_SORTS: Record<ColumnId, SortMode> = {
   inbox: 'manual',
@@ -35,11 +36,30 @@ function useIsDesktop() {
   return d
 }
 
-export default function TilesApp() {
+/**
+ * One board, two scopes.
+ *
+ * With no props this is Tiles exactly as it has always been: your own entries,
+ * your own tags, nobody else's anything. Pass a scope and the same board points
+ * at a shared space instead, which is how Heart and Treasure reuses every tile,
+ * every column and the whole drag and drop rather than forking them.
+ */
+export default function TilesApp({
+  scope: scopeProp,
+  title = 'Tiles'
+}: {
+  scope?: EntryScope
+  title?: string
+} = {}) {
   const { user, loading } = useAuth()
-  const { entries } = useEntries(user?.uid)
-  const { tagCategories, categories, loaded: tagsLoaded } = useUserData(user?.uid)
+  const scope = useMemo<EntryScope | null>(
+    () => scopeProp ?? (user ? personalScope(user.uid) : null),
+    [scopeProp, user]
+  )
+  const { entries } = useEntries(scope)
+  const { tagCategories, categories, loaded: tagsLoaded } = useUserData(scope?.tagPath)
   const isDesktop = useIsDesktop()
+  const [owned, setOwned] = useState<'all' | 'mine' | 'theirs'>('all')
 
   const [openId, setOpenId] = useState<string | null>(null)
   const [quickAdd, setQuickAdd] = useState(false)
@@ -66,8 +86,8 @@ export default function TilesApp() {
     if (!user || !tagsLoaded) return
     const used = new Set<string>()
     for (const e of entries) for (const t of e.tags) used.add(t)
-    registerTags(user.uid, [...used], tagCategories)
-  }, [entries, tagCategories, tagsLoaded, user])
+    if (scope) void registerTags(scope.tagPath, [...used], tagCategories)
+  }, [entries, tagCategories, tagsLoaded, user, scope])
 
   const knownTags = useMemo(() => Object.keys(tagCategories).sort(), [tagCategories])
 
@@ -76,9 +96,11 @@ export default function TilesApp() {
       entries.filter(
         (e) =>
           matchesFilter(e, selectedTags, search) &&
-          (showArchived ? e.archived === true : !e.archived)
+          (showArchived ? e.archived === true : !e.archived) &&
+          (owned === 'all' ||
+            (owned === 'mine' ? e.ownerUid === scope?.me : e.ownerUid !== scope?.me))
       ),
-    [entries, selectedTags, search, showArchived]
+    [entries, selectedTags, search, showArchived, owned, scope]
   )
   const counts = useMemo(() => {
     // Derived from COLUMNS so adding or retiring a column is a one line change.
@@ -93,16 +115,16 @@ export default function TilesApp() {
       <div className="flex min-h-screen items-center justify-center text-muted">…</div>
     )
   }
-  if (!user) return <Login />
+  if (!user || !scope) return <Login />
 
   async function quickCreate(text: string) {
     const { title, tags, dueDate } = parseCapture(text)
     setActiveColumn('inbox')
-    return createEntry(user!.uid, { title, tags, dueDate, type: 'note', column: 'inbox' })
+    return createEntry(scope!, { title, tags, dueDate, type: 'note', column: 'inbox' })
   }
 
   async function addToColumn(column: ColumnId) {
-    const id = await createEntry(user!.uid, { type: 'note', column })
+    const id = await createEntry(scope!, { type: 'note', column })
     setOpenId(id)
   }
 
@@ -115,10 +137,11 @@ export default function TilesApp() {
   }
 
   return (
+    <EntryScopeProvider value={scope}>
     <div className="min-h-screen pb-24">
       <header className="flex items-center justify-between px-4 pt-3">
         <h1 className="text-xl font-bold tracking-tight">
-          {showArchived ? 'Archived' : 'Tiles'}
+          {showArchived ? 'Archived' : title}
         </h1>
         <div className="flex items-center gap-3 text-xs text-muted">
           <button
@@ -132,6 +155,27 @@ export default function TilesApp() {
           </button>
         </div>
       </header>
+
+      {scope.shared && (
+        <div className="flex items-center gap-1.5 px-4 pt-2">
+          {(['all', 'mine', 'theirs'] as const).map((k) => (
+            <button
+              key={k}
+              onClick={() => setOwned(k)}
+              className={`rounded-full px-3 py-1 text-xs ${
+                owned === k
+                  ? 'bg-accent font-semibold text-white'
+                  : 'bg-panel text-muted hover:text-text'
+              }`}
+            >
+              {k === 'all' ? 'Everything' : k === 'mine' ? 'Mine' : 'Theirs'}
+            </button>
+          ))}
+          <span className="ml-1 text-xs text-muted">
+            Unassigned work shows under Theirs, because nobody has picked it up.
+          </span>
+        </div>
+      )}
 
       <TagBar
         tagCategories={tagCategories}
@@ -233,7 +277,7 @@ export default function TilesApp() {
 
       {showTags && (
         <TagManager
-          userId={user.uid}
+          tagPath={scope.tagPath}
           tagCategories={tagCategories}
           categories={categories}
           usage={usage}
@@ -249,5 +293,6 @@ export default function TilesApp() {
         </div>
       )}
     </div>
+    </EntryScopeProvider>
   )
 }

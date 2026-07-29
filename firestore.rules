@@ -402,6 +402,85 @@ service cloud.firestore {
       }
     }
 
+    // ----------------------------------------------------------------- SPACES
+    //
+    // A space is a shared workspace that belongs to no org and to nobody's
+    // private account. Heart and Treasure is one.
+    //
+    // Membership of the space is the only thing that grants access to it. A seat
+    // on the DLT board grants nothing here. Being admin of the org grants
+    // nothing here. There is no override anywhere in this section, which is the
+    // point: the people at the church cannot reach this work, and the people in
+    // this space cannot reach the church's.
+    function spaceSeat(spaceId) {
+      return /databases/$(database)/documents/spaces/$(spaceId)/members/$(request.auth.uid);
+    }
+    function inSpace(spaceId) {
+      return signedIn()
+        && exists(spaceSeat(spaceId))
+        && get(spaceSeat(spaceId)).data.get('active', false) == true;
+    }
+    function spaceInvite(spaceId) {
+      return /databases/$(database)/documents/spaces/$(spaceId)/invites/$(myEmail());
+    }
+
+    match /spaces/{spaceId} {
+      allow read: if inSpace(spaceId);
+
+      match /members/{uid} {
+        // Reading your own seat has to work when you have no seat, because the
+        // app reads it to decide whether the tab exists at all.
+        allow read: if inSpace(spaceId) || (signedIn() && uid == request.auth.uid);
+
+        // The only way in: claim the seat left for your verified address.
+        allow create: if signedIn()
+          && uid == request.auth.uid
+          && myEmail() != ''
+          && emailVerified()
+          && exists(spaceInvite(spaceId))
+          && request.resource.data.get('email', '') == myEmail()
+          && request.resource.data.get('name', '') == get(spaceInvite(spaceId)).data.get('name', '')
+          && request.resource.data.get('active', false) == true
+          && request.resource.data.keys().hasOnly(['name', 'email', 'active', 'claimedAt'])
+          && request.resource.data.get('claimedAt', null) == request.time;
+
+        // A two person workspace has no hierarchy, so members can remove and
+        // restore each other, but not themselves. Removing yourself would leave
+        // the space with one fewer way back in and no console to fix it from.
+        allow update: if inSpace(spaceId)
+          && uid != request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']);
+        allow delete: if inSpace(spaceId) && uid != request.auth.uid;
+      }
+
+      match /invites/{email} {
+        allow read: if inSpace(spaceId) || (signedIn() && email == myEmail());
+        allow create, update: if inSpace(spaceId)
+          && request.resource.data.get('email', '') == email
+          && request.resource.data.keys().hasOnly(['name', 'email', 'invitedAt']);
+        allow delete: if inSpace(spaceId);
+      }
+
+      // The shared tiles. Everyone in the space sees all of them and may change
+      // any of them, including handing one to the other person.
+      //
+      // Two different fields again: userId is who created it and is pinned, so
+      // a tile cannot be quietly reattributed. ownerUid is who it is assigned to
+      // and is meant to change, in either direction.
+      match /entries/{entryId} {
+        allow read, delete: if inSpace(spaceId);
+        allow create: if inSpace(spaceId)
+          && request.resource.data.get('userId', '') == request.auth.uid;
+        allow update: if inSpace(spaceId)
+          && request.resource.data.get('userId', '') == resource.data.get('userId', '');
+      }
+
+      // One shared tag vocabulary, so a tag means the same thing on both screens.
+      match /meta/{docId} {
+        allow read, write: if inSpace(spaceId);
+      }
+    }
+
     // Everything not matched above is denied by default. Do not add a collection
     // group rule of the form  match /{path=**}/members/{uid}  to make collection
     // group queries work. That pattern crosses the org boundary.

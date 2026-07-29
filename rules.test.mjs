@@ -83,6 +83,16 @@ await env.withSecurityRulesDisabled(async (ctx) => {
   await setDoc(doc(db, `orgs/${ORG}/shares/rachel__chip`), { ownerUid: 'rachel', ownerName: 'Rachel', withUid: 'chip' });
   await setDoc(doc(db, `orgs/${ORG}/shares/gabe__sam`), { ownerUid: 'gabe', ownerName: 'Gabe', withUid: 'sam' });
 
+  // Heart and Treasure: a shared space with no relationship to the org at all.
+  await setDoc(doc(db, 'spaces/ht'), { name: 'Heart and Treasure' });
+  await setDoc(doc(db, 'spaces/ht/members/chip'), {
+    name: 'Chip', email: 'chip@thepointcville.com', active: true });
+  await setDoc(doc(db, 'spaces/ht/invites/karen@example.com'), {
+    name: 'Karen', email: 'karen@example.com' });
+  await setDoc(doc(db, 'spaces/ht/entries/e_book'), {
+    userId: 'chip', title: 'Book outline', column: 'this_week', ownerUid: null });
+  await setDoc(doc(db, 'spaces/ht/meta/tags'), { categories: ['Book', 'Marketing'] });
+
   // Invites: a seat assigned to an email before that person has ever signed in.
   await setDoc(doc(db, `orgs/${ORG}/invites/newbie@thepointcville.com`), {
     name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt', campusId: null });
@@ -109,6 +119,15 @@ const newbie    = env.authenticatedContext('u_newbie', tok('newbie@thepointcvill
 const unverified = env.authenticatedContext('u_unver', tok('newbie@thepointcville.com', false)).firestore();
 const wouldbeboss = env.authenticatedContext('u_boss', tok('boss@thepointcville.com')).firestore();
 const walkin    = env.authenticatedContext('u_walkin', tok('random@gmail.com')).firestore();
+
+const karen = env.authenticatedContext('u_karen', tok('karen@example.com')).firestore();
+const spaceSeat = (extra = {}) => ({
+  name: 'Karen', email: 'karen@example.com', active: true,
+  claimedAt: serverTimestamp(), ...extra,
+});
+const tile = (extra = {}) => ({
+  userId: 'chip', title: 'x', column: 'inbox', ownerUid: null, ...extra,
+});
 
 const seat = (extra = {}) => ({
   name: 'New Person', email: 'newbie@thepointcville.com', role: 'dlt',
@@ -376,6 +395,64 @@ await t('a claimed seat cannot be re-created to undo a deactivation', () => asse
   setDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), seat())));
 await t('and the newly seated person cannot promote themselves', () => assertFails(
   updateDoc(doc(newbie, `orgs/${ORG}/members/u_newbie`), { role: 'admin' })));
+
+console.log('\nA SPACE IS SEALED OFF FROM THE ORG IN BOTH DIRECTIONS');
+await t('a space member reads the shared tiles', () => assertSucceeds(
+  getDocs(collection(chip, 'spaces/ht/entries'))));
+await t('a DLT editor is BLOCKED from the shared tiles', () => assertFails(
+  getDocs(collection(matt, 'spaces/ht/entries'))));
+await t('a DLT editor is BLOCKED from a single shared tile', () => assertFails(
+  getDoc(doc(gabe, 'spaces/ht/entries/e_book'))));
+await t('a DLT editor is BLOCKED from the space document', () => assertFails(
+  getDoc(doc(rachel, 'spaces/ht'))));
+await t('a DLT editor is BLOCKED from the shared tag list', () => assertFails(
+  getDoc(doc(matt, 'spaces/ht/meta/tags'))));
+await t('a non member is BLOCKED from the space roster', () => assertFails(
+  getDocs(collection(sam, 'spaces/ht/members'))));
+await t('a non member cannot write a shared tile', () => assertFails(
+  setDoc(doc(matt, 'spaces/ht/entries/e_sneak'), tile({ userId: 'matt' }))));
+
+console.log('\nINSIDE THE SPACE, BOTH PEOPLE ARE EQUAL');
+await t('you can read your own space seat when you have none', () => assertSucceeds(
+  getDoc(doc(karen, 'spaces/ht/members/u_karen'))));
+await t('an uninvited person cannot seat themselves in the space', () => assertFails(
+  setDoc(doc(walkin, 'spaces/ht/members/u_walkin'), spaceSeat({ email: 'random@gmail.com', name: 'Walk In' }))));
+await t('you cannot claim a space seat at a uid that is not yours', () => assertFails(
+  setDoc(doc(karen, 'spaces/ht/members/somebody'), spaceSeat())));
+await t('the claim must carry the invited name', () => assertFails(
+  setDoc(doc(karen, 'spaces/ht/members/u_karen'), spaceSeat({ name: 'Not Karen' }))));
+await t('the invited person claims their space seat', () => assertSucceeds(
+  setDoc(doc(karen, 'spaces/ht/members/u_karen'), spaceSeat())));
+await t('and can now read the shared tiles', () => assertSucceeds(
+  getDocs(collection(karen, 'spaces/ht/entries'))));
+await t('but a space seat reaches nothing on the DLT board', () => assertFails(
+  getDocs(collection(karen, `orgs/${ORG}/rocks`))));
+await t('and nothing in anybody\'s private roles', () => assertFails(
+  getDoc(doc(karen, 'users/chip/roles/r_finance'))));
+await t('and can assign a tile to the other person', () => assertSucceeds(
+  updateDoc(doc(karen, 'spaces/ht/entries/e_book'), { ownerUid: 'chip' })));
+await t('but cannot rewrite who created it', () => assertFails(
+  updateDoc(doc(karen, 'spaces/ht/entries/e_book'), { userId: 'u_karen' })));
+await t('a tile must be created under your own name', () => assertFails(
+  setDoc(doc(karen, 'spaces/ht/entries/e_forged'), tile({ userId: 'chip' }))));
+await t('a member creates a tile', () => assertSucceeds(
+  setDoc(doc(karen, 'spaces/ht/entries/e_mine'), tile({ userId: 'u_karen' }))));
+await t('a member deletes a tile', () => assertSucceeds(
+  deleteDoc(doc(karen, 'spaces/ht/entries/e_mine'))));
+await t('a member edits the shared tag list', () => assertSucceeds(
+  setDoc(doc(karen, 'spaces/ht/meta/tags'), { categories: ['Book', 'Workbook'] }, { merge: true })));
+await t('a member invites somebody else', () => assertSucceeds(
+  setDoc(doc(karen, 'spaces/ht/invites/editor@example.com'),
+    { name: 'Editor', email: 'editor@example.com' })));
+await t('a non member cannot invite themselves in', () => assertFails(
+  setDoc(doc(matt, 'spaces/ht/invites/matt@thepointcville.com'),
+    { name: 'Matt', email: 'matt@thepointcville.com' })));
+await t('a member cannot remove themselves', () => assertFails(
+  updateDoc(doc(karen, 'spaces/ht/members/u_karen'), { active: false })));
+await t('a member can remove the other person', () => assertSucceeds(
+  updateDoc(doc(karen, 'spaces/ht/members/chip'), { active: false })));
+await t('and removal cannot smuggle in a rename', () => assertFails(
+  updateDoc(doc(karen, 'spaces/ht/members/chip'), { active: true, name: 'Hijacked' })));
 
 console.log('\nEVERY PERSON KEEPS A PRIVATE ACCOUNT');
 await t("editor is BLOCKED from Chip's Roles cards", () => assertFails(getDoc(doc(matt, 'users/chip/roles/r_finance'))));

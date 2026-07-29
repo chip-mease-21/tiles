@@ -12,19 +12,23 @@ import { DltWorkspace } from './DltWorkspace';
 import { MemberAdmin } from '../admin/MemberAdmin';
 import { MyWork } from '../me/MyWork';
 import { TeamCards } from '../me/TeamCards';
+import { HeartAndTreasure } from '../ht/HeartAndTreasure';
 
-type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members';
+type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members' | 'ht';
 
 export function AppShell({ tiles }: { tiles: React.ReactNode }) {
-  const { canSeeBoard, isAdmin, loading, user } = useOrg();
+  const { canSeeBoard, isAdmin, loading, user, space } = useOrg();
   const [tab, setTab] = useState<Tab>('tiles');
 
   if (loading) {
     return <div className="p-8 text-center text-sm text-stone-500">Loading</div>;
   }
 
-  // Nobody seated on the shared board sees any of this. The app is exactly what
-  // it was before.
+  // Somebody who is only in Heart and Treasure gets that and nothing else. No
+  // church navigation, no personal board, nothing to explain.
+  if (!canSeeBoard && space) return <HeartAndTreasure />;
+
+  // Nobody seated on either gets exactly the app they had before.
   if (!canSeeBoard) return <>{tiles}</>;
 
   const tabs: { id: Tab; label: string }[] = [
@@ -32,6 +36,7 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
     { id: 'me', label: 'My roles' },
     { id: 'dlt', label: 'DLT board' },
     { id: 'team', label: 'Team' },
+    ...(space ? [{ id: 'ht' as Tab, label: 'Heart & Treasure' }] : []),
     ...(isAdmin ? [{ id: 'members' as Tab, label: 'Members' }] : []),
   ];
 
@@ -58,6 +63,7 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
       {tab === 'me' && <MyWork />}
       {tab === 'dlt' && <DltWorkspace />}
       {tab === 'team' && <TeamCards />}
+      {tab === 'ht' && <HeartAndTreasure />}
       {tab === 'members' && <MemberAdmin />}
       {user && <span className="sr-only">Signed in as {user.uid}</span>}
     </>

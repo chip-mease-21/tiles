@@ -5,6 +5,7 @@ import { COLUMNS, type ColumnId, type Entry, type EntryType } from '../types'
 import { sortTags } from '../lib/sort'
 import { tagColor } from '../lib/colors'
 import { updateEntry, deleteEntry } from '../lib/useEntries'
+import { useEntryScope } from '../lib/entryScope'
 import type { TagCategories } from '../lib/useUserData'
 
 export default function TileEditor({
@@ -18,6 +19,7 @@ export default function TileEditor({
   cats: TagCategories
   onClose: () => void
 }) {
+  const scope = useEntryScope()
   const [local, setLocal] = useState<Entry>(entry)
   const [tagInput, setTagInput] = useState('')
 
@@ -31,7 +33,7 @@ export default function TileEditor({
     const t = setTimeout(() => {
       const { id, ...patch } = local
       void id
-      updateEntry(entry.id, patch)
+      updateEntry(scope, entry.id, patch)
     }, 400)
     return () => clearTimeout(t)
   }, [local]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -62,14 +64,14 @@ export default function TileEditor({
   function closeAndSave() {
     const { id, ...patch } = local
     void id
-    updateEntry(entry.id, patch)
+    updateEntry(scope, entry.id, patch)
     onClose()
   }
 
   function archiveAndClose(value: boolean) {
     const { id, ...patch } = local
     void id
-    updateEntry(entry.id, { ...patch, archived: value })
+    updateEntry(scope, entry.id, { ...patch, archived: value })
     onClose()
   }
 
@@ -160,6 +162,31 @@ export default function TileEditor({
           )}
         </div>
 
+        {/* who owns it, shared boards only */}
+        {scope.shared && (
+          <div className="mb-3">
+            <label className="mb-1 block text-xs font-medium text-muted">Owner</label>
+            <div className="flex flex-wrap gap-1.5">
+              {[{ uid: '', name: 'Unassigned' }, ...scope.people].map((p) => {
+                const on = (local.ownerUid ?? '') === p.uid
+                return (
+                  <button
+                    key={p.uid || 'none'}
+                    onClick={() => set('ownerUid', p.uid || null)}
+                    className={`rounded-full px-3 py-1 text-xs ${
+                      on
+                        ? 'bg-accent font-semibold text-white'
+                        : 'border border-edge bg-panel text-muted hover:text-text'
+                    }`}
+                  >
+                    {p.name}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         {/* move to column */}
         <div className="mb-3">
           <label className="mb-1 block text-xs font-medium text-muted">Column</label>
@@ -224,7 +251,7 @@ export default function TileEditor({
             </button>
             <button
               onClick={() => {
-                deleteEntry(entry.id)
+                deleteEntry(scope, entry.id)
                 onClose()
               }}
               className="text-xs text-red-400/90 hover:text-red-500"
