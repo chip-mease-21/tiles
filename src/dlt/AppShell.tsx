@@ -14,8 +14,9 @@ import { MyWork } from '../me/MyWork';
 import { TeamCards } from '../me/TeamCards';
 import { HeartAndTreasure } from '../ht/HeartAndTreasure';
 import { Rhythm } from '../rhythm/Rhythm';
+import { CashFlow } from '../cashflow/CashFlow';
 
-type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members' | 'ht' | 'rhythm';
+type Tab = 'tiles' | 'me' | 'dlt' | 'team' | 'members' | 'ht' | 'rhythm' | 'cash';
 
 export function AppShell({ tiles }: { tiles: React.ReactNode }) {
   const { canSeeBoard, isAdmin, loading, user, space } = useOrg();
@@ -39,6 +40,10 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
     { id: 'dlt', label: 'DLT board' },
     { id: 'team', label: 'Team' },
     ...(space ? [{ id: 'ht' as Tab, label: 'Heart & Treasure' }] : []),
+    // Admin only, and the data behind it is private per person besides — the
+    // rules do not let one admin read another's. The tab is a courtesy; the
+    // rule is the control.
+    ...(isAdmin ? [{ id: 'cash' as Tab, label: 'Cash flow' }] : []),
     ...(isAdmin ? [{ id: 'members' as Tab, label: 'Members' }] : []),
   ];
 
@@ -66,6 +71,7 @@ export function AppShell({ tiles }: { tiles: React.ReactNode }) {
       {tab === 'dlt' && <DltWorkspace />}
       {tab === 'team' && <TeamCards />}
       {tab === 'rhythm' && <Rhythm />}
+      {tab === 'cash' && isAdmin && <CashFlow />}
       {tab === 'ht' && <HeartAndTreasure />}
       {tab === 'members' && <MemberAdmin />}
       {user && <span className="sr-only">Signed in as {user.uid}</span>}
