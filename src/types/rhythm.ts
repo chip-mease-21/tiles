@@ -27,8 +27,14 @@ export type Cadence = 'daily' | 'weekly' | 'monthly' | 'quarterly';
  * that quietly moves week is worse than one that never existed.
  */
 export type Repeat =
-  | { kind: 'daily' }
-  | { kind: 'weeks'; every: number; weekday: number; from: string }
+  /**
+   * Days of the week, and how often the week comes round.
+   *
+   * Daily is not a separate idea, it is all seven days selected. Keeping it
+   * separate is what produced a "daily" routine booking Fridays and Saturdays
+   * for someone who works Monday to Thursday.
+   */
+  | { kind: 'weeks'; every: number; weekdays: number[]; from: string }
   | { kind: 'months'; every: number; day: number; from: string }
   /** Two fixed days of the month. Payroll and cash live here; nothing else fits. */
   | { kind: 'twiceMonthly'; days: [number, number] }
@@ -38,12 +44,14 @@ export type Repeat =
 export type RepeatKind = Repeat['kind'];
 
 export const REPEAT_LABEL: Record<RepeatKind, string> = {
-  daily: 'Every day',
-  weeks: 'Weeks',
+  weeks: 'Days of the week',
   months: 'Months',
   twiceMonthly: 'Twice a month',
   weekdayOfMonth: 'A weekday each month',
 };
+
+export const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+export const WORK_DAYS = [1, 2, 3, 4, 5];
 
 export const NTH_LABEL = ['First', 'Second', 'Third', 'Fourth', 'Last'];
 
@@ -165,21 +173,52 @@ const QUARTER_EPOCH = '2026-01-01';
  * against live data has to be right the first time; a reader can be fixed and
  * redeployed, and the original fields are still sitting there untouched.
  */
+/**
+ * Normalise a stored rule to the current shape.
+ *
+ * Three generations exist in live data now: no `repeat` at all, a `repeat` with
+ * the separate `daily` kind, and a `weeks` rule carrying a single `weekday`.
+ * All three are read here rather than migrated, so nothing has to be rewritten
+ * under a running app and the original fields stay put if this needs undoing.
+ */
+function normalise(rep: Repeat | { kind: string; [k: string]: unknown }): Repeat {
+  const any = rep as { kind: string; [k: string]: unknown };
+  if (any.kind === 'daily') {
+    return { kind: 'weeks', every: 1, weekdays: [...ALL_DAYS], from: QUARTER_EPOCH };
+  }
+  if (any.kind === 'weeks') {
+    const days = Array.isArray(any.weekdays) && (any.weekdays as number[]).length
+      ? (any.weekdays as number[])
+      : [typeof any.weekday === 'number' ? (any.weekday as number) : 1];
+    return {
+      kind: 'weeks',
+      every: typeof any.every === 'number' ? any.every : 1,
+      weekdays: [...days].sort((a, b) => a - b),
+      from: typeof any.from === 'string' ? any.from : QUARTER_EPOCH,
+    };
+  }
+  return rep as Repeat;
+}
+
 export function repeatOf(r: Routine): Repeat {
-  if (r.repeat) return r.repeat;
+  if (r.repeat) return normalise(r.repeat);
   switch (r.cadence) {
     case 'daily':
-      return { kind: 'daily' };
+      return { kind: 'weeks', every: 1, weekdays: [...ALL_DAYS], from: QUARTER_EPOCH };
     case 'monthly':
       return { kind: 'months', every: 1, day: r.anchor ?? 1, from: QUARTER_EPOCH };
     case 'quarterly':
       return { kind: 'months', every: 3, day: r.anchor ?? 1, from: QUARTER_EPOCH };
     default:
-      return { kind: 'weeks', every: 1, weekday: r.anchor ?? 1, from: QUARTER_EPOCH };
+      return { kind: 'weeks', every: 1, weekdays: [r.anchor ?? 1], from: QUARTER_EPOCH };
   }
 }
 
-export const isDaily = (r: Routine) => repeatOf(r).kind === 'daily';
+/** All seven days, every week. Only this counts as daily. */
+export function isDaily(r: Routine): boolean {
+  const rep = repeatOf(r);
+  return rep.kind === 'weeks' && rep.every === 1 && rep.weekdays.length === 7;
+}
 
 /** A bare routine carrying only a repeat rule, for previewing dates in the editor. */
 export const previewOf = (repeat: Repeat): Routine => ({
@@ -223,16 +262,14 @@ export function nextDates(rep: Repeat, from: string, count = 3): string[] {
 
 /** The old two-field shape, written alongside `repeat` so a rollback still reads. */
 export function legacyCadence(rep: Repeat): Cadence {
-  if (rep.kind === 'daily') return 'daily';
-  if (rep.kind === 'weeks') return 'weekly';
+  if (rep.kind === 'weeks') return rep.weekdays.length === 7 ? 'daily' : 'weekly';
   if (rep.kind === 'months' && rep.every === 3) return 'quarterly';
   return 'monthly';
 }
 
 export function legacyAnchor(rep: Repeat): number | null {
   switch (rep.kind) {
-    case 'daily': return null;
-    case 'weeks': return rep.weekday;
+    case 'weeks': return rep.weekdays.length === 7 ? null : (rep.weekdays[0] ?? 1);
     case 'months': return rep.day;
     case 'twiceMonthly': return rep.days[0];
     case 'weekdayOfMonth': return null;
@@ -267,10 +304,9 @@ function baseOccursOn(r: Routine, iso: string): boolean {
   const rep = repeatOf(r);
   const d = at(iso);
   switch (rep.kind) {
-    case 'daily':
-      return true;
     case 'weeks':
-      return d.getDay() === rep.weekday && onBeat(weeksBetween(rep.from, iso), rep.every);
+      return rep.weekdays.includes(d.getDay())
+        && onBeat(weeksBetween(rep.from, iso), rep.every);
     case 'months':
       return d.getDate() === rep.day && onBeat(monthsBetween(rep.from, iso), rep.every);
     case 'twiceMonthly':
@@ -410,6 +446,24 @@ export function sinceLabel(r: Routine, today: string): string {
   return `done ${gap} days ago`;
 }
 
+const sameDays = (a: number[], b: number[]) =>
+  a.length === b.length && [...a].sort().every((v, i) => v === [...b].sort()[i]);
+
+/** Weekday sets people already have words for, so the row does not read as a list. */
+export function daysLabel(weekdays: number[]): string {
+  const days = [...weekdays].sort((a, b) => a - b);
+  if (days.length === 0) return 'no days';
+  if (sameDays(days, ALL_DAYS)) return 'every day';
+  if (sameDays(days, WORK_DAYS)) return 'weekdays';
+  if (sameDays(days, [0, 6])) return 'weekends';
+  // A run of consecutive days is a span, which is how you would say it out loud.
+  const run = days.every((d, i) => i === 0 || d === days[i - 1] + 1);
+  if (run && days.length > 2) {
+    return `${WEEKDAYS[days[0]].slice(0, 3)} to ${WEEKDAYS[days[days.length - 1]].slice(0, 3)}`;
+  }
+  return days.map((d) => WEEKDAYS[d].slice(0, 3)).join(', ');
+}
+
 export function ordinal(n: number): string {
   if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
   const suffix = n % 10 === 1 ? 'st' : n % 10 === 2 ? 'nd' : n % 10 === 3 ? 'rd' : 'th';
@@ -426,13 +480,19 @@ export function ordinal(n: number): string {
 export function anchorLabel(r: Routine): string {
   const rep = repeatOf(r);
   switch (rep.kind) {
-    case 'daily':
-      return 'every day';
     case 'weeks': {
-      const day = WEEKDAYS[rep.weekday] ?? 'Monday';
-      if (rep.every <= 1) return `${day}s`;
-      if (rep.every === 2) return `every other ${day}`;
-      return `every ${rep.every} weeks on ${day}`;
+      const days = daysLabel(rep.weekdays);
+      if (rep.every <= 1) {
+        // One day a week reads better pluralised: "Mondays", not "Mon".
+        return rep.weekdays.length === 1
+          ? `${WEEKDAYS[rep.weekdays[0]] ?? 'Monday'}s`
+          : days;
+      }
+      if (rep.weekdays.length === 1) {
+        const day = WEEKDAYS[rep.weekdays[0]] ?? 'Monday';
+        return rep.every === 2 ? `every other ${day}` : `every ${rep.every} weeks on ${day}`;
+      }
+      return rep.every === 2 ? `${days}, every other week` : `${days}, every ${rep.every} weeks`;
     }
     case 'months': {
       const day = `${ordinal(rep.day)} of the month`;

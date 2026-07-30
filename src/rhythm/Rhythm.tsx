@@ -18,14 +18,26 @@ import {
 import { watchRoles } from '../lib/me';
 import { todayIso, type Role } from '../types/me';
 import {
-  NTH_LABEL, REPEAT_LABEL, WEEKDAYS, anchorLabel, calendarWeeks, doneOn, dueNow, dueOccurrence,
+  ALL_DAYS, NTH_LABEL, REPEAT_LABEL, WEEKDAYS, WORK_DAYS, anchorLabel, calendarWeeks, doneOn, dueNow, dueOccurrence,
   isDaily, legacyAnchor, legacyCadence, nextDates, overdueBy, repeatOf, shiftPhase,
   comingUp, fmtMins, minutesOf, safeLinkOf, sinceLabel, stateOf,
   type DayCell, type Outcome, type Repeat, type RepeatKind, type Routine,
 } from '../types/rhythm';
 import { Button } from '../dlt/ui';
 
-const KINDS: RepeatKind[] = ['daily', 'weeks', 'months', 'twiceMonthly', 'weekdayOfMonth'];
+const KINDS: RepeatKind[] = ['weeks', 'months', 'twiceMonthly', 'weekdayOfMonth'];
+
+/** Seven day columns plus a narrow one for the week's total. */
+const GRID = 'grid-cols-[repeat(7,minmax(0,1fr))_4.25rem]';
+
+/**
+ * Minutes above which a day is called out rather than just counted.
+ *
+ * Ninety is roughly the point where routine work stops fitting around the edges
+ * of a day and starts needing a slot of its own. The number is a prompt to move
+ * something, which is why one-off moves exist.
+ */
+const HEAVY_DAY = 90;
 const newId = () => `r_${Math.random().toString(36).slice(2, 10)}`;
 
 export function Rhythm() {
@@ -219,20 +231,22 @@ function Calendar({
       </div>
 
       <div className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-        <div className="grid grid-cols-7 border-b border-stone-200 bg-stone-50">
+        <div className={`grid ${GRID} border-b border-stone-200 bg-stone-50`}>
           {WEEKDAYS.map((d) => (
             <div
               key={d}
               className="px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-stone-500"
             >
-              <span className="hidden sm:inline">{d.slice(0, 3)}</span>
-              <span className="sm:hidden">{d.slice(0, 1)}</span>
+              {d.slice(0, 3)}
             </div>
           ))}
+          <div className="border-l border-stone-200 px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wider text-stone-500">
+            Week
+          </div>
         </div>
 
         {weeks.map((week, wi) => (
-          <div key={wi} className="grid grid-cols-7 border-b border-stone-100 last:border-0">
+          <div key={wi} className={`grid ${GRID} border-b border-stone-100 last:border-0`}>
             {week.map((d) => {
               const dow = new Date(d.date + 'T12:00:00').getDay();
               const weekend = dow === 0 || dow === 6;
@@ -262,10 +276,12 @@ function Calendar({
                     <span className="flex-1" />
                     {load > 0 && (
                       <span
-                        className={`text-[10px] tabular-nums ${
-                          load >= 90 ? 'font-semibold text-stone-700' : 'text-stone-400'
+                        className={`rounded px-1 py-px text-[11px] font-semibold tabular-nums ${
+                          load >= HEAVY_DAY
+                            ? 'bg-stone-800 text-white'
+                            : 'bg-stone-100 text-stone-700'
                         }`}
-                        title="Everything due that day, daily work included"
+                        title="Time still outstanding that day"
                       >
                         {fmtMins(load)}
                       </span>
@@ -298,6 +314,24 @@ function Calendar({
                 </div>
               );
             })}
+            <div className="flex flex-col items-center justify-center border-l border-stone-200 bg-stone-50/60 px-1 py-2">
+              {(() => {
+                const total = week.reduce((n, d) => n + d.minutes, 0);
+                if (total === 0) {
+                  return <span className="text-[11px] text-stone-300">&mdash;</span>;
+                }
+                return (
+                  <span
+                    className={`text-xs font-semibold tabular-nums ${
+                      total >= HEAVY_DAY * 4 ? 'text-stone-900' : 'text-stone-600'
+                    }`}
+                    title="Everything still outstanding that week"
+                  >
+                    {fmtMins(total)}
+                  </span>
+                );
+              })()}
+            </div>
           </div>
         ))}
       </div>
@@ -605,12 +639,20 @@ function RepeatPicker({ value, onChange }: { value: Repeat; onChange: (r: Repeat
     if (kind === value.kind) return;
     const from = todayIso();
     onChange(
-      kind === 'daily' ? { kind: 'daily' }
-      : kind === 'weeks' ? { kind: 'weeks', every: 1, weekday: 1, from }
+      kind === 'weeks' ? { kind: 'weeks', every: 1, weekdays: [1], from }
       : kind === 'months' ? { kind: 'months', every: 1, day: 1, from }
       : kind === 'twiceMonthly' ? { kind: 'twiceMonthly', days: [1, 15] }
       : { kind: 'weekdayOfMonth', every: 1, nth: 2, weekday: 2, from },
     );
+  }
+
+  /** Toggling the last remaining day would leave a rule that never happens. */
+  function toggleDay(i: number) {
+    if (value.kind !== 'weeks') return;
+    const on = value.weekdays.includes(i);
+    if (on && value.weekdays.length === 1) return;
+    const next = on ? value.weekdays.filter((d) => d !== i) : [...value.weekdays, i];
+    onChange({ ...value, weekdays: next.sort((a, b) => a - b) });
   }
 
   return (
@@ -624,17 +666,34 @@ function RepeatPicker({ value, onChange }: { value: Repeat; onChange: (r: Repeat
 
       {value.kind === 'weeks' && (
         <>
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-stone-600">Every</span>
-            <Num value={value.every} min={1} max={26} onChange={(n) => onChange({ ...value, every: n })} />
-            <span className="text-xs text-stone-600">{value.every === 1 ? 'week, on' : 'weeks, on'}</span>
-          </div>
-          <div className="mb-2 flex flex-wrap gap-1.5">
+          <div className="mb-1.5 flex flex-wrap gap-1.5">
             {WEEKDAYS.map((d, i) => (
-              <Pill key={d} on={value.weekday === i} onClick={() => onChange({ ...value, weekday: i })}>
+              <Pill key={d} on={value.weekdays.includes(i)} onClick={() => toggleDay(i)}>
                 {d.slice(0, 3)}
               </Pill>
             ))}
+          </div>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-stone-500">Quick pick</span>
+            {([
+              ['Every day', ALL_DAYS],
+              ['Mon to Fri', WORK_DAYS],
+              ['Mon to Thu', [1, 2, 3, 4]],
+            ] as const).map(([label, days]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => onChange({ ...value, weekdays: [...days] })}
+                className="rounded-lg border border-stone-300 bg-white px-2 py-0.5 text-[11px] text-stone-700 hover:border-stone-400"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-stone-600">Repeat every</span>
+            <Num value={value.every} min={1} max={26} onChange={(n) => onChange({ ...value, every: n })} />
+            <span className="text-xs text-stone-600">{value.every === 1 ? 'week' : 'weeks'}</span>
           </div>
         </>
       )}
@@ -693,7 +752,7 @@ function RepeatPicker({ value, onChange }: { value: Repeat; onChange: (r: Repeat
         </>
       )}
 
-      {value.kind !== 'daily' && (
+      {(
         <div className="mb-2 rounded-xl bg-stone-50 px-3 py-2">
           <p className="text-xs text-stone-600">
             {preview.length ? (
@@ -739,7 +798,7 @@ function RoutineEditor({
     minutes: existing?.minutes ? String(existing.minutes) : '',
   });
   const [rep, setRep] = useState<Repeat>(
-    existing ? repeatOf(existing) : { kind: 'weeks', every: 1, weekday: 1, from: todayIso() },
+    existing ? repeatOf(existing) : { kind: 'weeks', every: 1, weekdays: [1], from: todayIso() },
   );
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -748,6 +807,10 @@ function RoutineEditor({
     if (f.title.trim().length < 2) { setError('Give it a name.'); return; }
     if (f.link.trim() && !safeLinkOf(f.link)) {
       setError('That link needs to be a web address starting with https://');
+      return;
+    }
+    if (rep.kind === 'weeks' && rep.weekdays.length === 0) {
+      setError('Pick at least one day of the week.');
       return;
     }
     if (rep.kind === 'twiceMonthly' && rep.days[0] === rep.days[1]) {
